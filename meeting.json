@@ -1,0 +1,30 @@
+{
+  "meeting_id": "156358d7-ee06-42b2-983a-49fb6001ba91",
+  "briefing": {
+    "text": "will russell 2000 beat nasdaq 100",
+    "objectives": [
+      "come up a sound conclusion"
+    ],
+    "alpha_files": [],
+    "alpha_content": {}
+  },
+  "selected_agents": [
+    "adversary",
+    "strategist",
+    "cfo",
+    "tech_director"
+  ],
+  "messages": [],
+  "turn_count": 0,
+  "current_speaker": null,
+  "debate_topics": [],
+  "unresolved_points": [],
+  "start_time": "2026-04-02T17:13:58.991279",
+  "termination_reason": null,
+  "persisted_transcript": null,
+  "llm": {
+    "provider": "openrouter",
+    "models_by_agent": {}
+  },
+  "bias_intensity_by_agent": {}
+}

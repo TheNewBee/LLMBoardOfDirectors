@@ -1,0 +1,33 @@
+providers:
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+
+default_model:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4
+  temperature: 0.7
+  max_tokens: 2000
+
+agent_models:
+  adversary:
+    provider: openrouter
+    model: qwen/qwen3.6-plus:free
+  data_specialist:
+    provider: openrouter
+    model: deepseek/deepseek-chat
+  strategist:
+    provider: openrouter
+    model: z-ai/glm-4.5-air:free
+  cfo:
+    provider: openrouter
+    model: qwen/qwen3.6-plus:free
+  tech_director:
+    provider: openrouter
+    model: qwen/qwen3.6-plus:free
+
+paths:
+  outputs_dir: transcripts
+
+# Minimum seconds between LLM requests (helps free / rate-limited models). Use 0 to disable.
+rate_limit_interval_seconds: 3
