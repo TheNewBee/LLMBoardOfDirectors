@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import logging
 from typing import Any, cast
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
+
+_LOG = logging.getLogger(__name__)
 
 
 class LLMBackendError(RuntimeError):
@@ -60,6 +63,7 @@ class OpenRouterBackend(LLMBackend):
                 max_tokens=max_tokens,
             )
         except Exception as exc:  # pragma: no cover - exercised through tests
+            _LOG.exception("OpenRouter generate failed model=%s", model)
             raise LLMBackendError(f"OpenRouter request failed: {exc}") from exc
 
         return response.choices[0].message.content or ""

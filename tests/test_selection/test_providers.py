@@ -44,8 +44,15 @@ class FakeBackend:
         return "openrouter"
 
 
+class _EmptyCredentialStore:
+    def get(self, provider: str) -> str | None:
+        _ = provider
+        return None
+
+
 def test_validate_rejects_non_openrouter() -> None:
-    router = LLMRouter(backend_factories={"openrouter": lambda k, u: FakeBackend()})
+    router = LLMRouter(backend_factories={
+                       "openrouter": lambda k, u: FakeBackend()})
     with pytest.raises(UnsupportedProviderError):
         validate_openrouter_for_meeting(
             provider="other",
@@ -53,11 +60,13 @@ def test_validate_rejects_non_openrouter() -> None:
             env={"OPENROUTER_API_KEY": "x"},
             router=router,
             validation_model="anthropic/claude-sonnet-4",
+            credential_store=_EmptyCredentialStore(),
         )
 
 
 def test_validate_requires_api_key_env() -> None:
-    router = LLMRouter(backend_factories={"openrouter": lambda k, u: FakeBackend()})
+    router = LLMRouter(backend_factories={
+                       "openrouter": lambda k, u: FakeBackend()})
     with pytest.raises(KeyError, match="OPENROUTER_API_KEY"):
         validate_openrouter_for_meeting(
             provider="openrouter",
@@ -65,11 +74,13 @@ def test_validate_requires_api_key_env() -> None:
             env={},
             router=router,
             validation_model="anthropic/claude-sonnet-4",
+            credential_store=_EmptyCredentialStore(),
         )
 
 
 def test_validate_raises_when_backend_returns_false() -> None:
-    router = LLMRouter(backend_factories={"openrouter": lambda k, u: FakeBackend(valid=False)})
+    router = LLMRouter(backend_factories={
+                       "openrouter": lambda k, u: FakeBackend(valid=False)})
     with pytest.raises(ProviderValidationError):
         validate_openrouter_for_meeting(
             provider="openrouter",
@@ -77,15 +88,18 @@ def test_validate_raises_when_backend_returns_false() -> None:
             env={"OPENROUTER_API_KEY": "x"},
             router=router,
             validation_model="anthropic/claude-sonnet-4",
+            credential_store=_EmptyCredentialStore(),
         )
 
 
 def test_validate_succeeds() -> None:
-    router = LLMRouter(backend_factories={"openrouter": lambda k, u: FakeBackend(valid=True)})
+    router = LLMRouter(backend_factories={
+                       "openrouter": lambda k, u: FakeBackend(valid=True)})
     validate_openrouter_for_meeting(
         provider="openrouter",
         app_config=make_config(),
         env={"OPENROUTER_API_KEY": "x"},
         router=router,
         validation_model="anthropic/claude-sonnet-4",
+        credential_store=_EmptyCredentialStore(),
     )

@@ -1,26 +1,58 @@
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
 import typer
 from dotenv import load_dotenv
 
 from boardroom import __version__
 from boardroom.cli.agents import agents_app
 from boardroom.cli.briefing import briefing_app
+from boardroom.cli.history import history_app
 from boardroom.cli.meet import meet_command
 
 app = typer.Typer(help="Autonomous adversarial boardroom.")
 app.add_typer(briefing_app, name="briefing")
 app.add_typer(agents_app, name="agents")
+app.add_typer(history_app, name="history")
 app.command(
     "meet",
     help="Run a meeting from saved MeetingState (after briefing + agents select).",
 )(meet_command)
 
+_LOG = logging.getLogger(__name__)
+_LOGGING_CONFIGURED = False
+
+
+def _configure_logging() -> None:
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return
+    level_name = os.getenv("BOARDROOM_LOG_LEVEL", "WARNING").upper()
+    level = getattr(logging, level_name, logging.WARNING)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    # Chroma may emit noisy telemetry client errors in local-only mode; suppress them.
+    logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+    _LOGGING_CONFIGURED = True
+    _LOG.debug("Logging configured at level=%s", logging.getLevelName(level))
+
 
 @app.callback()
 def main() -> None:
     """Boardroom CLI entrypoint."""
+    # First, load a standard .env alongside the project (if present).
     load_dotenv()
+
+    # Also support a repo-local env layout: ./env/board.env
+    alt_env_path = Path("env") / "board.env"
+    if alt_env_path.exists():
+        load_dotenv(alt_env_path, override=False)
+    _configure_logging()
 
 
 @app.command("version")

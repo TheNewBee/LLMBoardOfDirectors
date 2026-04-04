@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from boardroom.config import resolve_api_key
 from boardroom.llm.router import LLMRouter
 from boardroom.models import AppConfig, ModelConfig
+from boardroom.secrets import CredentialStore
 
 
 class UnsupportedProviderError(ValueError):
@@ -22,12 +23,18 @@ def validate_openrouter_for_meeting(
     env: Mapping[str, str],
     router: LLMRouter,
     validation_model: str,
+    credential_store: CredentialStore | None = None,
 ) -> None:
     if provider != "openrouter":
         raise UnsupportedProviderError(
             f'Phase 1 supports only provider "openrouter" (got {provider!r}).',
         )
-    resolve_api_key(provider, app_config, env)
+    resolve_api_key(
+        provider,
+        app_config,
+        env,
+        credential_store=credential_store,
+    )
     model_config = ModelConfig(provider=provider, model=validation_model)
     if not router.validate_model_config(
         model_config=model_config,

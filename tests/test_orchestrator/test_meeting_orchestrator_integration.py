@@ -7,6 +7,7 @@ import pytest
 
 from boardroom.models import (
     AgentConfig,
+    AgentRole,
     AppConfig,
     Briefing,
     MeetingLLMSelection,
@@ -20,6 +21,7 @@ from boardroom.models import (
 from boardroom.orchestrator.meeting_orchestrator import MeetingOrchestrator, phase2_tool_hook_noop
 from boardroom.orchestrator.termination import TerminationDetector, TerminationDetectorConfig
 from boardroom.registry import AgentRegistry
+from boardroom.tools import ToolExecutor
 
 
 def _app_config() -> AppConfig:
@@ -390,3 +392,54 @@ def test_meeting_completion_persists_transcript_artifacts(tmp_path: Path) -> Non
     assert "## Transcript" in main
     assert "## Kill Sheet" in main
     assert "## Consensus Roadmap" in main
+
+
+def test_data_specialist_tool_hook_attaches_tool_calls_and_results() -> None:
+    class FixedTurnSelector:
+        def next_speaker(self, meeting: MeetingState, agents_map: dict[str, AgentConfig]) -> str:
+            _ = meeting
+            _ = agents_map
+            return "data_specialist"
+
+    det = TerminationDetector(
+        TerminationDetectorConfig(
+            min_turns=1, max_turns=1, deadlock_jaccard_threshold=0.99),
+        consensus_judge=lambda _m: False,
+    )
+    tool_executor = ToolExecutor()
+
+    def hook(*, meeting: MeetingState, message: Message, raw_content: str) -> None:
+        _ = meeting
+        _ = raw_content
+        tool_executor.apply_to_message(
+            message=message,
+            raw_content=message.content,
+            agent_role=AgentRole.DATA_SPECIALIST,
+        )
+
+    orch = MeetingOrchestrator(
+        registry=AgentRegistry(),
+        app_config=_app_config(),
+        llm=FakeLLM(
+            [
+                'Running tools.\n```tool\n{"name":"python_exec","args":{"code":"print(2+2)"}}\n```'
+            ]
+        ),
+        turn_selector=FixedTurnSelector(),
+        termination_detector=det,
+        tool_hook=hook,
+    )
+    final = orch.start_meeting(
+        meeting_id="tools-int",
+        briefing=_briefing(),
+        selected_agents=["adversary", "data_specialist"],
+        env={"OPENROUTER_API_KEY": "test-key"},
+    )
+
+    assert final.messages
+    first = final.messages[0]
+    assert first.agent_id == "data_specialist"
+    assert first.tool_calls
+    assert first.tool_results
+    assert first.tool_results[0]["ok"] is True
+    assert "Tool execution summary" in first.content

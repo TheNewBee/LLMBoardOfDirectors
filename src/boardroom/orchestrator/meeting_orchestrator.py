@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Protocol, TypedDict, cast
 
@@ -12,6 +13,9 @@ from boardroom.orchestrator.termination import TerminationDetector
 from boardroom.transcript import TranscriptManager
 from boardroom.orchestrator.turn_selector import TurnSelector
 from boardroom.registry import AgentRegistry
+from boardroom.vector_store import MeetingVectorStore
+
+_LOG = logging.getLogger(__name__)
 
 
 class MeetingLLM(Protocol):
@@ -135,6 +139,11 @@ class MeetingOrchestrator:
         env: Mapping[str, str] | None = None,
     ) -> MeetingState:
         """Execute the LangGraph loop for an existing MeetingState (preserves llm overlays, etc.)."""
+        _LOG.info(
+            "Running meeting orchestration meeting_id=%s selected_agents=%d",
+            meeting.meeting_id,
+            len(meeting.selected_agents),
+        )
         self._registry.validate_selection(meeting.selected_agents)
         out = cast(
             MeetingGraphState,
@@ -153,6 +162,28 @@ class MeetingOrchestrator:
         agents_by_id = out["agent_configs_by_id"]
         transcript = TranscriptManager(outputs_dir=self._app_config.paths.outputs_dir).persist(
             final_meeting, agents_by_id
+        )
+        if self._app_config.vector_store.enabled:
+            try:
+                transcript_body = transcript.path.read_text(encoding="utf-8")
+                store = MeetingVectorStore(
+                    persist_dir=self._app_config.vector_store.persist_dir,
+                    collection_name=self._app_config.vector_store.collection_name,
+                )
+                store.upsert_meeting(meeting=final_meeting,
+                                     transcript_markdown=transcript_body)
+            except Exception:
+                _LOG.exception(
+                    "Vector store upsert failed meeting_id=%s",
+                    final_meeting.meeting_id,
+                )
+        _LOG.info(
+            "Meeting orchestration completed meeting_id=%s turns=%d termination=%s",
+            final_meeting.meeting_id,
+            final_meeting.turn_count,
+            final_meeting.termination_reason.value
+            if final_meeting.termination_reason is not None
+            else "n/a",
         )
         return final_meeting.model_copy(update={"persisted_transcript": transcript})
 
@@ -214,15 +245,20 @@ class MeetingOrchestrator:
             )
             content = raw.strip()
             if not content:
+                _LOG.error(
+                    "LLM returned empty content meeting_id=%s agent_id=%s",
+                    meeting.meeting_id,
+                    agent_id,
+                )
                 raise RuntimeError(
                     f"LLM returned empty content for agent '{agent_id}'.")
             message = Message(agent_id=agent_id,
                               agent_name=cfg.name, content=content)
             next_meeting = meeting.with_appended_message(message)
-            next_transcript = _append_transcript_line(
-                state["transcript_text"], message)
             self._invoke_tool_hook(meeting=next_meeting,
                                    message=message, raw_content=content)
+            next_transcript = _append_transcript_line(
+                state["transcript_text"], message)
             if self._after_agent_message is not None:
                 self._after_agent_message(next_meeting, message)
             return {
@@ -268,18 +304,26 @@ class MeetingOrchestrator:
     def _invoke_tool_hook(
         self, *, meeting: MeetingState, message: Message, raw_content: str
     ) -> None:
-        if self._tool_hook_mode == self._TOOL_HOOK_WITH_MESSAGE:
-            self._tool_hook(meeting=meeting, message=message,
-                            raw_content=raw_content)
-            return
-        if self._tool_hook_mode == self._TOOL_HOOK_WITH_AGENT_ID:
-            self._tool_hook(
-                meeting=meeting,
-                agent_id=message.agent_id,
-                raw_content=raw_content,
+        try:
+            if self._tool_hook_mode == self._TOOL_HOOK_WITH_MESSAGE:
+                self._tool_hook(meeting=meeting, message=message,
+                                raw_content=raw_content)
+                return
+            if self._tool_hook_mode == self._TOOL_HOOK_WITH_AGENT_ID:
+                self._tool_hook(
+                    meeting=meeting,
+                    agent_id=message.agent_id,
+                    raw_content=raw_content,
+                )
+                return
+            self._tool_hook(meeting=meeting, raw_content=raw_content)
+        except Exception:
+            _LOG.exception(
+                "Tool hook failed meeting_id=%s agent_id=%s",
+                meeting.meeting_id,
+                message.agent_id,
             )
-            return
-        self._tool_hook(meeting=meeting, raw_content=raw_content)
+            raise
 
     @classmethod
     def _detect_tool_hook_mode(

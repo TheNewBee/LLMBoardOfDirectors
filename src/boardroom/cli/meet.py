@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,9 @@ from boardroom.models import MeetingState, Message, TerminationReason
 from boardroom.orchestrator.meeting_orchestrator import MeetingOrchestrator
 from boardroom.orchestrator.termination import TerminationDetector, TerminationDetectorConfig
 from boardroom.registry import AgentRegistry, AgentSelectionError
+from boardroom.tools import ToolExecutor, WebSearchTool
+
+_LOG = logging.getLogger(__name__)
 
 
 def validate_meeting_ready_for_run(state: MeetingState) -> None:
@@ -88,12 +92,15 @@ def meet_command(
         raw = json.loads(from_path.read_text(encoding="utf-8"))
         state = MeetingState.model_validate(raw)
     except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        _LOG.exception("Failed to load meeting state from path=%s", from_path)
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
     try:
         validate_meeting_ready_for_run(state)
     except ValueError as exc:
+        _LOG.exception(
+            "Meeting state is not ready meeting_id=%s", state.meeting_id)
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
@@ -106,7 +113,17 @@ def meet_command(
 
     reg = AgentRegistry()
     router = LLMRouter()
+    tools = ToolExecutor(
+        web_search_tool=WebSearchTool(
+            config=app_config.web_search, env=os.environ),
+    )
     termination = _termination_for_cli_max_turns(max_turns)
+    _LOG.info(
+        "Starting meeting run meeting_id=%s selected_agents=%d max_turns=%s",
+        state.meeting_id,
+        len(state.selected_agents),
+        max_turns,
+    )
 
     def before_turn(agent_id: str) -> None:
         cfg = reg.get_config(agent_id)
@@ -118,12 +135,36 @@ def meet_command(
         _ = meeting
         typer.echo(
             f"\n{message.agent_name} ({message.agent_id}):\n{message.content}\n")
+        if message.tool_results:
+            typer.echo("Tool results:")
+            for row in message.tool_results:
+                tool_name = row.get("name", "tool")
+                status = "ok" if row.get("ok") else "error"
+                typer.echo(f"- {tool_name}: {status}")
+
+    def tool_hook(*, meeting: MeetingState, message: Message, raw_content: str) -> None:
+        _ = meeting
+        role = reg.get_config(message.agent_id).role
+        try:
+            tools.apply_to_message(
+                message=message,
+                raw_content=raw_content,
+                agent_role=role,
+            )
+        except Exception as exc:  # pragma: no cover - guarded by tool tests
+            _LOG.exception("Recoverable tool error meeting_id=%s agent_id=%s",
+                           state.meeting_id, message.agent_id)
+            message.tool_results.append(
+                {"name": "tool_runtime", "ok": False,
+                    "error": f"recoverable tool error: {exc}"}
+            )
 
     orch = MeetingOrchestrator(
         registry=reg,
         app_config=app_config,
         llm=router,
         termination_detector=termination,
+        tool_hook=tool_hook,
         before_agent_turn=before_turn,
         after_agent_message=after_message,
     )
@@ -131,11 +172,18 @@ def meet_command(
     try:
         final = orch.run_meeting(meeting=state, env=os.environ)
     except (AgentSelectionError, KeyError, RuntimeError, LLMBackendError) as exc:
+        _LOG.exception("Meeting run failed meeting_id=%s", state.meeting_id)
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
     tr = final.persisted_transcript
     reason = final.termination_reason
+    _LOG.info(
+        "Meeting run completed meeting_id=%s termination=%s transcript=%s",
+        final.meeting_id,
+        reason.value if reason is not None else "n/a",
+        str(tr.path) if tr is not None else "none",
+    )
     typer.echo("\n========== Meeting complete ==========")
     if reason is not None:
         typer.echo(f"Termination: {_termination_label(reason)}")

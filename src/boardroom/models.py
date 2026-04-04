@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -189,11 +189,66 @@ class PathsConfig(BaseModel):
     outputs_dir: Path = Path("transcripts")
 
 
+class VectorStoreConfig(BaseModel):
+    enabled: bool = False
+    persist_dir: Path = Path(".boardroom/vector_store")
+    collection_name: str = "boardroom_meetings"
+    default_top_k: int = Field(default=5, gt=0)
+
+
+class WebSearchConfig(BaseModel):
+    """Settings for the `web_search` agent tool (DuckDuckGo or Google Programmable Search)."""
+
+    provider: Literal["duckduckgo", "google"] = "duckduckgo"
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    query_max_len: int = Field(default=160, ge=8, le=2048)
+    max_results_cap: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Upper bound for web_search max_results (Google API allows up to 10 per request).",
+    )
+    duckduckgo_url: str = Field(
+        default="https://api.duckduckgo.com/",
+        min_length=8,
+    )
+    google_api_url: str = Field(
+        default="https://www.googleapis.com/customsearch/v1",
+        min_length=8,
+    )
+    google_api_key_env: str = Field(
+        default="GOOGLE_CSE_API_KEY",
+        min_length=1,
+        description="Process env var holding the Google API key (not stored in YAML).",
+    )
+    google_cse_id: str = Field(
+        default="",
+        description='Search engine ID ("cx") from Google Programmable Search Engine.',
+    )
+
+    @field_validator("google_api_key_env")
+    @classmethod
+    def validate_google_api_key_env(cls, value: str) -> str:
+        if value.upper() != value:
+            raise ValueError("google_api_key_env must be uppercase")
+        return value
+
+    @model_validator(mode="after")
+    def validate_google_requires_cse_id(self) -> "WebSearchConfig":
+        if self.provider == "google" and not self.google_cse_id.strip():
+            raise ValueError(
+                "google_cse_id is required when web_search.provider is google",
+            )
+        return self
+
+
 class AppConfig(BaseModel):
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     default_model: ModelConfig = Field(default_factory=ModelConfig)
     agent_models: dict[str, ModelConfig] = Field(default_factory=dict)
     paths: PathsConfig = Field(default_factory=PathsConfig)
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     rate_limit_interval_seconds: float = Field(
         default=0.0,
         ge=0.0,

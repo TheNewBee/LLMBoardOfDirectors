@@ -2,6 +2,21 @@ from __future__ import annotations
 
 from boardroom.models import AgentRole
 
+_TOOL_BLOCK_GUIDANCE = (
+    "\n\n"
+    "You may use tools when they genuinely help your reasoning in this discussion "
+    "(e.g. quick calculations, sanity checks, or brief web lookups for timely facts). "
+    "When you use a tool, emit one fenced JSON tool block using this exact shape:\n"
+    "```tool\n"
+    '{{"name":"python_exec","args":{{"code":"print(2+2)"}}}}\n'
+    "```\n"
+    "or\n"
+    "```tool\n"
+    '{{"name":"web_search","args":{{"query":"latest market data","max_results":3}}}}\n'
+    "```\n"
+    "Use only `python_exec` and `web_search` names. Keep normal analysis outside the tool block."
+)
+
 _ROLE_INTRO: dict[AgentRole, str] = {
     AgentRole.ADVERSARY: (
         "You are {name}, the designated adversary. Your job is brutal honesty: "
@@ -33,7 +48,5 @@ _ROLE_INTRO: dict[AgentRole, str] = {
 
 
 def role_template(role: AgentRole) -> str:
-    return _ROLE_INTRO.get(
-        role,
-        _ROLE_INTRO[AgentRole.CUSTOM],
-    )
+    base = _ROLE_INTRO.get(role, _ROLE_INTRO[AgentRole.CUSTOM])
+    return base + _TOOL_BLOCK_GUIDANCE

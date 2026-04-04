@@ -42,6 +42,32 @@ def test_apply_persona_injects_briefing_context() -> None:
     assert "Stress-test" in prompt or "economics" in prompt.lower()
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        AgentRole.ADVERSARY,
+        AgentRole.DATA_SPECIALIST,
+        AgentRole.STRATEGIST,
+        AgentRole.CFO,
+        AgentRole.TECH_DIRECTOR,
+        AgentRole.CUSTOM,
+    ],
+)
+def test_all_roles_prompt_includes_tool_contract(role: AgentRole) -> None:
+    engine = PersonaEngine()
+    persona = PersonaConfig(
+        name="Alex",
+        role=role,
+        expertise="metrics",
+        biases=[],
+        communication_style="analytical",
+    )
+    prompt = engine.apply_persona(persona)
+    assert "```tool" in prompt
+    assert "python_exec" in prompt
+    assert "web_search" in prompt
+
+
 def test_persona_config_json_round_trip() -> None:
     from boardroom.persona.config import persona_from_json, persona_to_json
 
@@ -114,7 +140,8 @@ def test_validate_consistency_rejects_leaky_turn() -> None:
     )
     bad = "As an AI, I think we should proceed."
     with pytest.raises(PersonaConsistencyError):
-        engine.validate_consistency(persona, prior_turn_contents=[], candidate_turn=bad)
+        engine.validate_consistency(
+            persona, prior_turn_contents=[], candidate_turn=bad)
 
 
 def test_validate_consistency_requires_first_and_second_person_perspective() -> None:

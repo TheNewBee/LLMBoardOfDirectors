@@ -31,3 +31,18 @@ paths:
 
 # Minimum seconds between LLM requests (helps free / rate-limited models). Use 0 to disable.
 rate_limit_interval_seconds: 3
+
+vector_store:
+  enabled: true
+  persist_dir: .boardroom/vector_store
+  collection_name: boardroom_meetings
+  default_top_k: 5
+
+# Optional: web_search tool for all agents. Default is DuckDuckGo (no key).
+# web_search:
+#   provider: google
+#   google_cse_id: "YOUR_SEARCH_ENGINE_ID"
+#   google_api_key_env: GOOGLE_CSE_API_KEY
+#   timeout_seconds: 15
+#   query_max_len: 200
+#   max_results_cap: 8

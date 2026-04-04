@@ -10,8 +10,9 @@ from pydantic import ValidationError
 
 from boardroom.config import load_config
 from boardroom.llm.router import LLMRouter
-from boardroom.models import MeetingLLMSelection, MeetingState
+from boardroom.models import AppConfig, MeetingLLMSelection, MeetingState
 from boardroom.registry import AgentRegistry, AgentSelectionError
+from boardroom.secrets import CredentialStore, CredentialStoreError
 from boardroom.selection.parse import parse_key_value_floats, parse_key_value_strings
 from boardroom.selection.providers import (
     ProviderValidationError,
@@ -20,6 +21,8 @@ from boardroom.selection.providers import (
 )
 
 agents_app = typer.Typer(help="Agent roster and chairman selection.")
+key_app = typer.Typer(help="Manage encrypted provider API keys.")
+agents_app.add_typer(key_app, name="key")
 
 
 @agents_app.command("list")
@@ -61,15 +64,18 @@ def select_agents(
     ],
     out: Annotated[
         Path | None,
-        typer.Option("--out", help="Write updated MeetingState JSON (default: overwrite --from)."),
+        typer.Option(
+            "--out", help="Write updated MeetingState JSON (default: overwrite --from)."),
     ] = None,
     provider: Annotated[
         str,
-        typer.Option("--provider", help='LLM provider (Phase 1: "openrouter" only).'),
+        typer.Option(
+            "--provider", help='LLM provider (Phase 1: "openrouter" only).'),
     ] = "openrouter",
     validate: Annotated[
         bool,
-        typer.Option("--validate", help="Ping OpenRouter to verify the API key before saving."),
+        typer.Option(
+            "--validate", help="Ping OpenRouter to verify the API key before saving."),
     ] = False,
     agent_model: Annotated[
         list[str],
@@ -94,7 +100,8 @@ def select_agents(
     ] = None,
     config_path: Annotated[
         Path | None,
-        typer.Option("--config", exists=True, help="Optional config.yaml path."),
+        typer.Option("--config", exists=True,
+                     help="Optional config.yaml path."),
     ] = None,
     validation_model: Annotated[
         str | None,
@@ -133,7 +140,8 @@ def select_agents(
     models_by_agent: dict[str, str] = {}
     if agent_model:
         try:
-            models_by_agent = parse_key_value_strings(agent_model, name="--agent-model")
+            models_by_agent = parse_key_value_strings(
+                agent_model, name="--agent-model")
         except ValueError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
@@ -208,3 +216,122 @@ def select_agents(
         f"Selected {len(agent)} agents for meeting {updated.meeting_id}; "
         f"provider={provider!r}. Saved to {dest}",
     )
+
+
+def _provider_env_name(provider: str, app_config: AppConfig) -> str:
+    config = app_config.providers.get(provider)
+    if config is None:
+        raise KeyError(f"Unknown provider: {provider}")
+    return config.api_key_env
+
+
+@key_app.command("set")
+def set_key(
+    provider: Annotated[
+        str,
+        typer.Option(
+            "--provider", help='Provider id (Phase 2 currently uses "openrouter").'),
+    ] = "openrouter",
+    validate: Annotated[
+        bool,
+        typer.Option(
+            "--validate", help="Validate the key against provider after saving."),
+    ] = True,
+    validation_model: Annotated[
+        str | None,
+        typer.Option(
+            "--validation-model",
+            help="Model id used for validation (default: config default_model).",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True,
+                     help="Optional config.yaml path."),
+    ] = None,
+) -> None:
+    """Save/update an encrypted API key for a provider (hidden prompt; no argv secret)."""
+    app_config = load_config(config_path)
+    secret = typer.prompt("API key", hide_input=True)
+    store = CredentialStore()
+    try:
+        store.set(provider, secret)
+    except CredentialStoreError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Saved encrypted key for provider {provider!r}.")
+
+    if not validate:
+        return
+    model = validation_model or app_config.default_model.model
+    env_name = _provider_env_name(provider, app_config)
+    validate_env = dict(os.environ)
+    validate_env[env_name] = secret
+    router = LLMRouter()
+    try:
+        validate_openrouter_for_meeting(
+            provider=provider,
+            app_config=app_config,
+            env=validate_env,
+            router=router,
+            validation_model=model,
+        )
+    except (UnsupportedProviderError, ProviderValidationError, KeyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Validation succeeded for provider {provider!r}.")
+
+
+@key_app.command("check")
+def check_key(
+    provider: Annotated[
+        str,
+        typer.Option(
+            "--provider", help='Provider id (Phase 2 currently uses "openrouter").'),
+    ] = "openrouter",
+    validation_model: Annotated[
+        str | None,
+        typer.Option(
+            "--validation-model",
+            help="Model id used for validation (default: config default_model).",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True,
+                     help="Optional config.yaml path."),
+    ] = None,
+) -> None:
+    """Check that an encrypted key exists and validates for a provider."""
+    app_config = load_config(config_path)
+    store = CredentialStore()
+    try:
+        secret = store.get(provider)
+    except CredentialStoreError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not secret:
+        typer.echo(
+            f"No encrypted key found for provider {provider!r}. Run `boardroom agents key set`.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    env_name = _provider_env_name(provider, app_config)
+    validate_env = dict(os.environ)
+    validate_env[env_name] = secret
+    model = validation_model or app_config.default_model.model
+    router = LLMRouter()
+    try:
+        validate_openrouter_for_meeting(
+            provider=provider,
+            app_config=app_config,
+            env=validate_env,
+            router=router,
+            validation_model=model,
+        )
+    except (UnsupportedProviderError, ProviderValidationError, KeyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Encrypted key is present and valid for provider {provider!r}.")
