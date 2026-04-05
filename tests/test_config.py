@@ -35,10 +35,10 @@ def test_load_config_returns_default_openrouter_config_when_missing() -> None:
 
     assert "openrouter" in config.providers
     assert config.default_model.provider == "openrouter"
-    assert config.web_search.provider == "duckduckgo"
+    assert config.web_search.provider == "ddgs"
 
 
-def test_load_config_rejects_google_without_cse_id(tmp_path: Path) -> None:
+def test_load_config_rejects_non_uppercase_tavily_env_var(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         """
@@ -47,12 +47,35 @@ providers:
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
 web_search:
-  provider: google
+  provider: tavily
+  tavily_api_key_env: tavily_api_key
 """.strip(),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValidationError, match="google_cse_id"):
+    with pytest.raises(ValidationError, match="tavily_api_key_env"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_removed_web_search_provider_with_explicit_message(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+providers:
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+web_search:
+  provider: duckduckgo
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValidationError, match="was removed|Use one of: ddgs, tavily"
+    ):
         load_config(config_path)
 
 

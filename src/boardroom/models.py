@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -196,50 +197,70 @@ class VectorStoreConfig(BaseModel):
     default_top_k: int = Field(default=5, gt=0)
 
 
-class WebSearchConfig(BaseModel):
-    """Settings for the `web_search` agent tool (DuckDuckGo or Google Programmable Search)."""
+_ALLOWED_WEB_SEARCH_PROVIDERS = ("ddgs", "tavily")
+_REMOVED_WEB_SEARCH_PROVIDERS = ("duckduckgo", "google", "parallel_cli")
+_ALLOW_CUSTOM_TAVILY_URL_ENV = "BOARDROOM_ALLOW_CUSTOM_TAVILY_URL"
 
-    provider: Literal["duckduckgo", "google"] = "duckduckgo"
+
+class WebSearchConfig(BaseModel):
+    """Settings for the `web_search` agent tool (free-first default + optional quality API)."""
+
+    provider: Literal["ddgs", "tavily"] = "ddgs"
     timeout_seconds: float = Field(default=10.0, gt=0)
     query_max_len: int = Field(default=160, ge=8, le=2048)
     max_results_cap: int = Field(
         default=5,
         ge=1,
-        le=10,
-        description="Upper bound for web_search max_results (Google API allows up to 10 per request).",
+        le=20,
+        description="Upper bound for web_search max_results sent to search backends.",
     )
-    duckduckgo_url: str = Field(
-        default="https://api.duckduckgo.com/",
+    tavily_api_url: str = Field(
+        default="https://api.tavily.com/search",
         min_length=8,
     )
-    google_api_url: str = Field(
-        default="https://www.googleapis.com/customsearch/v1",
-        min_length=8,
-    )
-    google_api_key_env: str = Field(
-        default="GOOGLE_CSE_API_KEY",
+    tavily_api_key_env: str = Field(
+        default="TAVILY_API_KEY",
         min_length=1,
-        description="Process env var holding the Google API key (not stored in YAML).",
+        description="Process env var holding Tavily API key.",
     )
-    google_cse_id: str = Field(
-        default="",
-        description='Search engine ID ("cx") from Google Programmable Search Engine.',
-    )
+    tavily_search_depth: Literal["basic", "advanced"] = "basic"
 
-    @field_validator("google_api_key_env")
+    @field_validator("provider", mode="before")
     @classmethod
-    def validate_google_api_key_env(cls, value: str) -> str:
+    def validate_provider(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError(
+                "web_search.provider must be one of: ddgs, tavily.")
+        provider = value.strip().lower()
+        if provider in _ALLOWED_WEB_SEARCH_PROVIDERS:
+            return provider
+        if provider in _REMOVED_WEB_SEARCH_PROVIDERS:
+            removed = ", ".join(_REMOVED_WEB_SEARCH_PROVIDERS)
+            raise ValueError(
+                f"web_search.provider '{provider}' was removed. "
+                f"Use one of: ddgs, tavily. Removed values: {removed}."
+            )
+        raise ValueError("web_search.provider must be one of: ddgs, tavily.")
+
+    @field_validator("tavily_api_key_env")
+    @classmethod
+    def validate_tavily_api_key_env(cls, value: str) -> str:
         if value.upper() != value:
-            raise ValueError("google_api_key_env must be uppercase")
+            raise ValueError("tavily_api_key_env must be uppercase")
         return value
 
-    @model_validator(mode="after")
-    def validate_google_requires_cse_id(self) -> "WebSearchConfig":
-        if self.provider == "google" and not self.google_cse_id.strip():
+    @field_validator("tavily_api_url")
+    @classmethod
+    def validate_tavily_api_url(cls, value: str) -> str:
+        api_url = value.strip()
+        if os.environ.get(_ALLOW_CUSTOM_TAVILY_URL_ENV) == "1":
+            return api_url
+        if not api_url.startswith("https://api.tavily.com/"):
             raise ValueError(
-                "google_cse_id is required when web_search.provider is google",
+                "tavily_api_url must start with https://api.tavily.com/. "
+                f"Set {_ALLOW_CUSTOM_TAVILY_URL_ENV}=1 to allow a custom endpoint."
             )
-        return self
+        return api_url
 
 
 class AppConfig(BaseModel):

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,17 @@ class WebSearchResult:
     results: list[dict[str, str]]
 
 
+def _default_ddgs_factory() -> Any:
+    try:
+        module = importlib.import_module("ddgs")
+        ddgs_cls = getattr(module, "DDGS")
+    except ImportError as exc:
+        raise ValueError(
+            "DDGS backend is selected but package 'ddgs' is not installed."
+        ) from exc
+    return ddgs_cls()
+
+
 class WebSearchTool:
     def __init__(
         self,
@@ -39,11 +51,13 @@ class WebSearchTool:
         config: WebSearchConfig | None = None,
         env: Mapping[str, str] | None = None,
         client: httpx.Client | None = None,
+        ddgs_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._config = config or WebSearchConfig()
         self._env: Mapping[str, str] = env if env is not None else os.environ
         timeout = float(self._config.timeout_seconds)
         self._client = client or httpx.Client(timeout=timeout)
+        self._ddgs_factory = ddgs_factory or _default_ddgs_factory
 
     @property
     def max_results_cap(self) -> int:
@@ -52,85 +66,71 @@ class WebSearchTool:
     def search(self, query: str, *, max_results: int = 3) -> WebSearchResult:
         clean = sanitize_search_query(
             query, max_len=int(self._config.query_max_len))
-        cap = max(1, min(10, int(max_results)))
-        if self._config.provider == "google":
-            return self._search_google(clean, cap)
-        return self._search_duckduckgo(clean, cap)
+        requested = max(1, int(max_results))
+        cap = min(int(self._config.max_results_cap), requested)
+        if self._config.provider == "tavily":
+            return self._search_tavily(clean, cap)
+        return self._search_ddgs(clean, cap)
 
-    def _search_duckduckgo(self, clean: str, max_results: int) -> WebSearchResult:
-        url = str(self._config.duckduckgo_url).rstrip("/") + "/"
-        response = self._client.get(
-            url,
-            params={
-                "q": clean,
-                "format": "json",
-                "no_html": "1",
-                "skip_disambig": "1",
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
+    def _search_ddgs(self, clean: str, max_results: int) -> WebSearchResult:
         rows: list[dict[str, str]] = []
+        ddgs = self._ddgs_factory()
+        try:
+            raw_rows: Iterable[dict[str, Any]] = ddgs.text(
+                clean, max_results=max_results)
+            for row in raw_rows:
+                if len(rows) >= max_results:
+                    break
+                if not isinstance(row, dict):
+                    continue
+                title = str(row.get("title") or row.get(
+                    "source") or "").strip()
+                url = str(row.get("href") or row.get("url") or "").strip()
+                snippet = str(
+                    row.get("body") or row.get(
+                        "snippet") or row.get("description") or ""
+                ).strip()
+                if not url:
+                    continue
+                rows.append(
+                    {"title": title or url, "url": url, "snippet": snippet})
+        finally:
+            closer = getattr(ddgs, "close", None)
+            if callable(closer):
+                closer()
+        return WebSearchResult(query=clean, provider="ddgs", results=rows[:max_results])
 
-        abstract_text = str(payload.get("AbstractText") or "").strip()
-        abstract_url = str(payload.get("AbstractURL") or "").strip()
-        if abstract_text and abstract_url:
-            rows.append(
-                {
-                    "title": str(payload.get("Heading") or "DuckDuckGo Abstract"),
-                    "url": abstract_url,
-                    "snippet": abstract_text,
-                }
-            )
-
-        for topic in payload.get("RelatedTopics", []):
-            if len(rows) >= max_results:
-                break
-            if not isinstance(topic, dict):
-                continue
-            text = str(topic.get("Text") or "").strip()
-            link = str(topic.get("FirstURL") or "").strip()
-            if not text or not link:
-                continue
-            rows.append({"title": text[:80], "url": link, "snippet": text})
-
-        return WebSearchResult(
-            query=clean, provider="duckduckgo", results=rows[:max_results])
-
-    def _search_google(self, clean: str, max_results: int) -> WebSearchResult:
-        api_key = str(
-            self._env.get(self._config.google_api_key_env, "") or "").strip()
+    def _search_tavily(self, clean: str, max_results: int) -> WebSearchResult:
+        api_key = str(self._env.get(
+            self._config.tavily_api_key_env, "") or "").strip()
         if not api_key:
             raise ValueError(
-                f"Missing environment variable {self._config.google_api_key_env!r} "
-                "for Google web search.",
+                f"Missing environment variable {self._config.tavily_api_key_env!r} "
+                "for Tavily web search.",
             )
-        cx = self._config.google_cse_id.strip()
-        num = min(10, max(1, max_results))
-        base = str(self._config.google_api_url).rstrip("/")
-        response = self._client.get(
-            base,
-            params={
-                "key": api_key,
-                "cx": cx,
-                "q": clean,
-                "num": str(num),
+        response = self._client.post(
+            str(self._config.tavily_api_url),
+            json={
+                "api_key": api_key,
+                "query": clean,
+                "search_depth": self._config.tavily_search_depth,
+                "max_results": max_results,
             },
         )
         response.raise_for_status()
         payload: dict[str, Any] = response.json()
         rows: list[dict[str, str]] = []
-        for item in payload.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()
-            link = str(item.get("link") or "").strip()
-            snippet = str(item.get("snippet") or "").strip()
-            if link:
-                rows.append(
-                    {"title": title or link, "url": link, "snippet": snippet})
+        for row in payload.get("results", []):
             if len(rows) >= max_results:
                 break
-
-        return WebSearchResult(
-            query=clean, provider="google", results=rows[:max_results])
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            url = str(row.get("url") or "").strip()
+            snippet = str(row.get("content") or row.get(
+                "snippet") or "").strip()
+            if not url:
+                continue
+            rows.append(
+                {"title": title or url, "url": url, "snippet": snippet})
+        return WebSearchResult(query=clean, provider="tavily", results=rows[:max_results])

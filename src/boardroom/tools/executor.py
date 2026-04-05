@@ -6,6 +6,7 @@ from typing import Any
 
 from boardroom.models import AgentRole, Message
 from boardroom.tools.python_executor import PythonExecutor
+from boardroom.tools.registry import PYTHON_EXEC_TOOL, WEB_SEARCH_TOOL
 from boardroom.tools.web_search import WebSearchTool
 
 _TOOL_BLOCK_RE = re.compile(r"```tools?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
@@ -20,6 +21,10 @@ class ToolExecutor:
     ) -> None:
         self._python = python_executor or PythonExecutor()
         self._web = web_search_tool or WebSearchTool()
+        self._handlers = {
+            PYTHON_EXEC_TOOL.name: self._run_python_exec,
+            WEB_SEARCH_TOOL.name: self._run_web_search,
+        }
 
     def apply_to_message(
         self,
@@ -84,38 +89,43 @@ class ToolExecutor:
             name = str(call.get("name"))
             args = call.get("args") if isinstance(
                 call.get("args"), dict) else {}
-            if name == "python_exec":
-                code = str(args.get("code", ""))
-                result = self._python.execute(code)
-                return {
-                    "name": name,
-                    "ok": result.ok,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                    "exit_code": result.exit_code,
-                    "timed_out": result.timed_out,
-                    "blocked": result.blocked,
-                }
-            if name == "web_search":
-                query = str(args.get("query", ""))
-                max_results_raw = args.get("max_results", 3)
-                cap = self._web.max_results_cap
-                try:
-                    requested = int(max_results_raw)
-                except (TypeError, ValueError):
-                    requested = 3
-                max_results = max(1, min(cap, requested))
-                search = self._web.search(query, max_results=max_results)
-                return {
-                    "name": name,
-                    "ok": True,
-                    "provider": search.provider,
-                    "query": search.query,
-                    "results": search.results,
-                }
-            return {"name": name, "ok": False, "error": f"Unsupported tool: {name}"}
+            handler = self._handlers.get(name)
+            if handler is None:
+                return {"name": name, "ok": False, "error": f"Unsupported tool: {name}"}
+            return handler(args)
         except Exception as exc:
             return {"name": str(call.get("name", "tool")), "ok": False, "error": str(exc)}
+
+    def _run_python_exec(self, args: dict[str, Any]) -> dict[str, Any]:
+        code = str(args.get("code", ""))
+        result = self._python.execute(code)
+        return {
+            "name": PYTHON_EXEC_TOOL.name,
+            "ok": result.ok,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+            "timed_out": result.timed_out,
+            "blocked": result.blocked,
+        }
+
+    def _run_web_search(self, args: dict[str, Any]) -> dict[str, Any]:
+        query = str(args.get("query", ""))
+        max_results_raw = args.get("max_results", 3)
+        cap = self._web.max_results_cap
+        try:
+            requested = int(max_results_raw)
+        except (TypeError, ValueError):
+            requested = 3
+        max_results = max(1, min(cap, requested))
+        search = self._web.search(query, max_results=max_results)
+        return {
+            "name": WEB_SEARCH_TOOL.name,
+            "ok": True,
+            "provider": search.provider,
+            "query": search.query,
+            "results": search.results,
+        }
 
     @staticmethod
     def _summary_lines(results: list[dict[str, Any]]) -> str:

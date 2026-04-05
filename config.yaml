@@ -38,11 +38,17 @@ vector_store:
   collection_name: boardroom_meetings
   default_top_k: 5
 
-# Optional: web_search tool for all agents. Default is DuckDuckGo (no key).
+# Optional: web_search tool for all agents. Valid providers are only: ddgs, tavily.
+# Removed provider values (duckduckgo, google, parallel_cli) are rejected.
 # web_search:
-#   provider: google
-#   google_cse_id: "YOUR_SEARCH_ENGINE_ID"
-#   google_api_key_env: GOOGLE_CSE_API_KEY
+#   provider: ddgs
 #   timeout_seconds: 15
 #   query_max_len: 200
 #   max_results_cap: 8
+# Optional quality upgrade via Tavily API:
+# web_search:
+#   provider: tavily
+#   tavily_api_key_env: TAVILY_API_KEY
+#   tavily_search_depth: basic  # or advanced
+#   timeout_seconds: 15
+#   max_results_cap: 10

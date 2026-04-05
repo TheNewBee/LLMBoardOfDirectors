@@ -1,15 +1,14 @@
 # Boardroom
 
-Boardroom is an open source CLI for running autonomous adversarial debates between specialized AI agents. You bring your own API keys, choose models per agent, and keep transcripts and outputs local.
+Boardroom is an open-source CLI for running autonomous adversarial debates between specialized AI agents. You bring your own API keys, choose models per agent, and keep transcripts and outputs local.
 
-## Current Status
+## Current status
 
-Phase 1 is feature-complete and in hardening/checkpoint:
-
-- Briefing submission CLI
-- Agent selection CLI (with optional per-agent model and bias overrides)
-- Meeting runner CLI with live turn streaming
-- Transcript, Kill Sheet, and Consensus Roadmap artifacts
+- **Briefing & roster**: submit a briefing, select 2–6 agents with optional per-agent models and bias overrides.
+- **Meetings**: run debates with live turn streaming; artifacts include transcript, kill sheet, and consensus roadmap.
+- **Tools**: all agents may call **`python_exec`** (best-effort local sandbox via `python -I`, timeout, minimal env, blocked risky ops) and **`web_search`** (DDGS free search by default, optional Tavily quality backend).
+- **Credentials**: optional encrypted OpenRouter key with OS keyring for the wrapping key; env vars still win.
+- **History**: optional local Chroma vector store for meeting text; `boardroom history search` queries past runs.
 
 ## Principles
 
@@ -18,39 +17,34 @@ Phase 1 is feature-complete and in hardening/checkpoint:
 - Local-first outputs
 - Adversarial analysis over consensus
 
-## Quick Start
+## Quick start
 
-1. Create a virtual environment.
-2. Install the package in editable mode with dev dependencies:
+1. Create a virtual environment and install (with dev extras if you run tests):
 
 ```bash
 python -m pip install -e .[dev]
 ```
 
-3. Create an env file outside this repo and set your OpenRouter key (BYOK):
-   - Recommended: create `./env/board.env` in the project root and add:
+2. Set **`OPENROUTER_API_KEY`** (see `.env.example` for optional variables such as Tavily or `BOARDROOM_CREDENTIAL_KEY`).
+   - Typical layout: a `.env` in the directory you run commands from, and/or **`env/board.env`** next to it.
 
-```bash
-OPENROUTER_API_KEY=sk-or-...
-```
+Boardroom loads **`.env`** from the current working directory, then **`env/board.env`** if it exists, without overriding variables already set in the process.
 
-- Alternatively, create a standard `.env` file alongside the repo and set the same variable.
-
-Boardroom will automatically load a `.env` in the current working directory and, if present, an additional `env/board.env` file without overriding existing environment variables.
-
-4. Optional (recommended): store an encrypted provider key for local fallback when env vars are absent:
+3. Optionally store an encrypted key for when the env var is unset:
 
 ```bash
 boardroom agents key set --provider openrouter --validate
 ```
 
-5. Edit `config.yaml` to adjust models, optional rate limiting, and vector store settings.
+(API key is entered via **hidden prompt only**—not via CLI flags.)
 
-## CLI Workflow
+4. Edit **`config.yaml`** for models, rate limiting, `vector_store`, and `web_search`.
 
-Run the Phase 1 flow in three commands:
+## CLI workflow
 
-1. Submit briefing and save initial state.
+Typical three-step flow:
+
+**1. Briefing** — create initial meeting state:
 
 ```bash
 boardroom briefing submit \
@@ -61,7 +55,7 @@ boardroom briefing submit \
   --out meeting.json
 ```
 
-2. Select agents and persist meeting LLM choices.
+**2. Agent selection** — pick agents and persist LLM choices:
 
 ```bash
 boardroom agents select \
@@ -73,83 +67,78 @@ boardroom agents select \
   --out meeting.json
 ```
 
-3. Run the meeting and write artifacts.
+**3. Run meeting** — stream turns and write artifacts:
 
 ```bash
-boardroom meet \
-  --from meeting.json \
-  --max-turns 8 \
-  --outputs-dir transcripts
+boardroom meet --from meeting.json --max-turns 8
 ```
 
-Generated artifacts:
+Use **`--config path/to/config.yaml`** when your `config.yaml` is not discovered from the current directory (same for `history search`). Optional **`--outputs-dir`** overrides `paths.outputs_dir` for that run.
+
+**Artifacts** (under `paths.outputs_dir` from config, unless overridden):
 
 - `*_transcript.md`
 - `*_kill_sheet.md`
 - `*_consensus_roadmap.md`
 
-By default, outputs are written under `paths.outputs_dir` from `config.yaml`.
+## Tool execution
 
-## Tool Execution (Phase 2 MVP)
+Agents are prompted to use tools only when helpful. The model emits a single fenced JSON block:
 
-- Tool execution is enabled for **every** board agent (same `python_exec` / `web_search` contract in each role prompt).
-- Tool requests are parsed from fenced `tool` / `tools` JSON blocks in the model output.
-- Recoverable tool failures are recorded in `tool_results` and do not terminate the meeting loop.
-- Current built-ins:
-  - `python_exec` with `{"code": "..."}`
-  - `web_search` with `{"query": "...", "max_results": 3}` (optional; capped by `web_search.max_results_cap` in `config.yaml`, default 5, max 10)
+- Fence: ` ```tool ` or ` ```tools `
+- Payload: one object or an array of objects: `{"name": "<tool>", "args": { ... }}`
 
-Configure search under `web_search` in `config.yaml`:
+**Built-ins**
 
-- **`provider`**: `duckduckgo` (default, no API key) or `google` ([Programmable Search Engine](https://programmablesearchengine.google.com/) + [Custom Search JSON API](https://developers.google.com/custom-search/v1/overview)).
-- **`timeout_seconds`**, **`query_max_len`**, **`max_results_cap`**, **`duckduckgo_url`**, **`google_api_url`** — optional overrides.
-- For Google: set **`google_cse_id`** (the search engine “cx” id) in YAML and put the API key in the env var named by **`google_api_key_env`** (default `GOOGLE_CSE_API_KEY`).
+| Tool          | Args                            | Notes                                                                                                                                                                |
+| ------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `python_exec` | `code`                          | Runs local `python -I -c` with timeout, minimal env, AST safety checks (module allowlist + blocked dangerous builtins), and output truncation (best-effort sandbox). |
+| `web_search`  | `query`, optional `max_results` | Capped by `web_search.max_results_cap` (default 5, up to 20).                                                                                                        |
 
-Example tool block:
+Parse or runtime failures are attached to `tool_results` and do not stop the meeting.
+
+Example:
 
 ```tool
 {"name":"python_exec","args":{"code":"print(2+2)"}}
 ```
 
-## Encrypted Credentials
+## Encrypted credentials
 
-- API key precedence is: environment variable first, encrypted store fallback.
-- Save/update key (interactive hidden prompt only — avoids shell history / `ps` leaks):
-
-```bash
-boardroom agents key set --provider openrouter --validate
-```
-
-- Check stored key:
+- **Order of precedence**: process environment → encrypted store (`boardroom agents key set`).
+- **Storage**: ciphertext in `~/.boardroom/credentials.json`; wrapping key in the OS secret store via [keyring](https://pypi.org/project/keyring/) when available (not next to the JSON).
+- **Headless / CI**: set **`BOARDROOM_CREDENTIAL_KEY`** to a Fernet key (url-safe base64, same shape as `Fernet.generate_key()`).
+- Stored values are never printed.
 
 ```bash
 boardroom agents key check --provider openrouter
 ```
 
-- Ciphertext lives under `~/.boardroom/credentials.json`. The wrapping key is stored in the OS secret service (via [keyring](https://pypi.org/project/keyring/)) when available, not beside the JSON. For headless or CI, set `BOARDROOM_CREDENTIAL_KEY` to a Fernet key (same format as `Fernet.generate_key()` output). With an explicit `CredentialStore(base_dir=...)` (tests), the key file stays under that directory.
-- Values are never printed.
+## History search
 
-## History Search
-
-Meetings are persisted into a local vector store when `vector_store.enabled` is true.
+When **`vector_store.enabled`** is true, completed meetings are indexed after each run (same embedding backend as local search).
 
 ```bash
 boardroom history search --query "pricing risk and compliance" --limit 5
 ```
 
-## Configuration
+Requires vector store paths in config; relative `vector_store.persist_dir` is resolved from the **directory containing** the loaded `config.yaml`, so runs from different working directories still use the same store when you pass the same `--config`.
 
-Boardroom supports:
+## Configuration (`config.yaml`)
 
-- one OpenRouter key for all agents with different models
-- different providers for different agents
-- per-agent model overrides on top of a default model
-- optional `rate_limit_interval_seconds` in `config.yaml` to space LLM calls (helps with free-model upstream limits)
-- local vector-store persistence and query controls via `vector_store.*` in `config.yaml` (relative `paths.outputs_dir` and `vector_store.persist_dir` are resolved against the directory containing `config.yaml`)
+- **Models**: `default_model`, `agent_models`, OpenRouter under `providers.openrouter`.
+- **Rate limiting**: `rate_limit_interval_seconds` spaces LLM calls (useful for free-tier models).
+- **Paths**: `paths.outputs_dir` — relative paths are resolved against the config file’s directory.
+- **Vector store**: `vector_store.enabled`, `persist_dir`, `collection_name`, `default_top_k`.
+- **Web search** (`web_search`):
+  - **`provider`**: `ddgs` (default, free/no API key) or `tavily` (optional higher-quality paid API).
+  - **Strict values**: removed providers (`duckduckgo`, `google`, `parallel_cli`) are rejected with explicit validation errors.
+  - **Tavily**: set API key in env var named by **`tavily_api_key_env`** (default `TAVILY_API_KEY`).
+  - **Tuning**: `timeout_seconds`, `query_max_len`, `max_results_cap`, `tavily_search_depth`, optional `tavily_api_url` (must start with `https://api.tavily.com/` unless `BOARDROOM_ALLOW_CUSTOM_TAVILY_URL=1`).
 
-Optional runtime knobs:
+**Environment**
 
-- `BOARDROOM_LOG_LEVEL` environment variable (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
+- **`BOARDROOM_LOG_LEVEL`**: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
 
 ## License
 

@@ -42,3 +42,32 @@ def test_python_executor_blocks_disallowed_operations() -> None:
     assert result.ok is False
     assert result.blocked is True
     assert "blocked operations" in result.stderr.lower()
+
+
+def test_python_executor_rejects_overlong_code() -> None:
+    result = PythonExecutor(max_code_chars=10).execute(
+        "print('this is too long')")
+    assert result.ok is False
+    assert "exceeds max length" in result.stderr.lower()
+
+
+def test_python_executor_truncates_large_stdout() -> None:
+    result = PythonExecutor(max_output_chars=20).execute("print('x' * 200)")
+    assert result.ok is True
+    assert "...[truncated]" in result.stdout
+
+
+def test_python_executor_blocks_importlib_bypass() -> None:
+    result = PythonExecutor(timeout_seconds=5).execute(
+        "import importlib\nimportlib.import_module('os')"
+    )
+    assert result.ok is False
+    assert result.blocked is True
+    assert "not allowed" in result.stderr.lower()
+
+
+def test_python_executor_allows_safe_stdlib_imports() -> None:
+    result = PythonExecutor(timeout_seconds=5).execute(
+        "import math\nprint(math.sqrt(16))")
+    assert result.ok is True
+    assert result.stdout == "4.0"

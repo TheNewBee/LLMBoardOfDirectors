@@ -15,6 +15,7 @@ from boardroom.models import (
     Message,
     ModelConfig,
     ProviderConfig,
+    WebSearchConfig,
 )
 
 
@@ -58,13 +59,15 @@ def test_briefing_rejects_alpha_content_without_files() -> None:
 
 
 def test_meeting_state_allows_empty_selected_agents_for_briefing_phase() -> None:
-    state = MeetingState(meeting_id="m1", briefing=make_briefing(), selected_agents=[])
+    state = MeetingState(
+        meeting_id="m1", briefing=make_briefing(), selected_agents=[])
     assert state.selected_agents == []
 
 
 def test_meeting_state_rejects_single_selected_agent() -> None:
     with pytest.raises(ValidationError):
-        MeetingState(meeting_id="m1", briefing=make_briefing(), selected_agents=["only-one"])
+        MeetingState(meeting_id="m1", briefing=make_briefing(),
+                     selected_agents=["only-one"])
 
 
 def test_meeting_state_rejects_more_than_six_agents() -> None:
@@ -77,7 +80,8 @@ def test_meeting_state_rejects_more_than_six_agents() -> None:
 
 
 def test_message_serializes_timestamp() -> None:
-    message = Message(agent_id="a1", agent_name="Marcus", content="This breaks fast.")
+    message = Message(agent_id="a1", agent_name="Marcus",
+                      content="This breaks fast.")
     payload = message.model_dump(mode="json")
 
     assert payload["agent_id"] == "a1"
@@ -97,12 +101,14 @@ def test_app_config_returns_agent_specific_model() -> None:
     )
 
     assert config.model_for_agent("cfo").model == "openai/gpt-4o-mini"
-    assert config.model_for_agent("adversary").model == "anthropic/claude-sonnet-4"
+    assert config.model_for_agent(
+        "adversary").model == "anthropic/claude-sonnet-4"
 
 
 def test_provider_config_requires_uppercase_env_name() -> None:
     with pytest.raises(ValidationError):
-        ProviderConfig(api_key_env="openrouter_api_key", base_url="https://example.com")
+        ProviderConfig(api_key_env="openrouter_api_key",
+                       base_url="https://example.com")
 
 
 def test_transcript_paths_can_round_trip_in_models() -> None:
@@ -116,3 +122,18 @@ def test_transcript_paths_can_round_trip_in_models() -> None:
     )
 
     assert config.paths.outputs_dir == Path("transcripts")
+
+
+def test_web_search_config_rejects_non_tavily_urls_by_default() -> None:
+    with pytest.raises(ValidationError, match="https://api.tavily.com/"):
+        WebSearchConfig(provider="tavily",
+                        tavily_api_url="https://example.com/search")
+
+
+def test_web_search_config_allows_custom_tavily_url_with_escape_hatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOARDROOM_ALLOW_CUSTOM_TAVILY_URL", "1")
+    config = WebSearchConfig(
+        provider="tavily", tavily_api_url="https://proxy.local/search")
+    assert config.tavily_api_url == "https://proxy.local/search"

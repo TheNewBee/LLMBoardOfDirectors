@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import pytest
 import httpx
+import pytest
 
 from boardroom.models import WebSearchConfig
-
 from boardroom.tools import WebSearchTool, sanitize_search_query
 
 
@@ -22,19 +21,33 @@ class _FakeResponse:
 class _FakeClient:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
-        self.last_params: dict[str, str] | None = None
+        self.last_json: dict[str, object] | None = None
 
-    def get(self, url: str, params: dict[str, str]) -> _FakeResponse:
+    def post(self, url: str, json: dict[str, object]) -> _FakeResponse:
         _ = url
-        self.last_params = params
+        self.last_json = json
         return _FakeResponse(self._payload)
 
 
 class _FailingClient:
-    def get(self, url: str, params: dict[str, str]) -> _FakeResponse:
+    def post(self, url: str, json: dict[str, object]) -> _FakeResponse:
         _ = url
-        _ = params
+        _ = json
         raise httpx.ReadTimeout("timeout")
+
+
+class _FakeDdgs:
+    def __init__(self, rows: list[dict[str, str]]) -> None:
+        self._rows = rows
+        self.closed = False
+
+    def text(self, query: str, *, max_results: int) -> list[dict[str, str]]:
+        _ = query
+        _ = max_results
+        return self._rows
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_sanitize_search_query_collapses_whitespace_and_trims() -> None:
@@ -52,80 +65,75 @@ def test_sanitize_search_query_respects_max_len() -> None:
     assert len(sanitize_search_query(long_q, max_len=20)) <= 20
 
 
-def test_web_search_tool_parses_abstract_and_related_topics() -> None:
-    fake_client = _FakeClient(
-        {
-            "Heading": "Topic",
-            "AbstractText": "Primary summary",
-            "AbstractURL": "https://example.com/primary",
-            "RelatedTopics": [
-                {"Text": "Extra result one", "FirstURL": "https://example.com/1"},
-                {"Text": "Extra result two", "FirstURL": "https://example.com/2"},
-            ],
-        }
+def test_web_search_tool_ddgs_parses_results() -> None:
+    fake_ddgs = _FakeDdgs(
+        [
+            {"title": "A", "href": "https://example.com/a", "body": "alpha"},
+            {"title": "B", "href": "https://example.com/b", "body": "beta"},
+        ]
     )
-    tool = WebSearchTool(client=fake_client)
+    tool = WebSearchTool(ddgs_factory=lambda: fake_ddgs)
     out = tool.search("topic", max_results=2)
 
-    assert out.provider == "duckduckgo"
+    assert out.provider == "ddgs"
     assert out.query == "topic"
     assert len(out.results) == 2
-    assert out.results[0]["url"] == "https://example.com/primary"
-    assert out.results[1]["url"] == "https://example.com/1"
-    assert fake_client.last_params is not None
-    assert fake_client.last_params["q"] == "topic"
+    assert out.results[0]["url"] == "https://example.com/a"
+    assert out.results[1]["url"] == "https://example.com/b"
+    assert fake_ddgs.closed is True
 
 
-def test_web_search_tool_propagates_http_client_errors() -> None:
-    tool = WebSearchTool(client=_FailingClient())
+def test_web_search_tool_tavily_propagates_http_client_errors() -> None:
+    cfg = WebSearchConfig(provider="tavily")
+    tool = WebSearchTool(
+        config=cfg, env={"TAVILY_API_KEY": "x"}, client=_FailingClient())
     with pytest.raises(httpx.ReadTimeout):
         tool.search("topic")
 
 
-def test_web_search_tool_google_parses_items() -> None:
+def test_web_search_tool_tavily_parses_results() -> None:
     fake_client = _FakeClient(
         {
-            "items": [
+            "results": [
                 {
                     "title": "T1",
-                    "link": "https://example.com/a",
-                    "snippet": "S1",
+                    "url": "https://example.com/a",
+                    "content": "S1",
                 },
                 {
                     "title": "T2",
-                    "link": "https://example.com/b",
-                    "snippet": "S2",
+                    "url": "https://example.com/b",
+                    "content": "S2",
                 },
             ]
         }
     )
     cfg = WebSearchConfig(
-        provider="google",
-        google_cse_id="cx123",
-        google_api_key_env="GOOGLE_CSE_API_KEY",
+        provider="tavily",
+        tavily_api_key_env="TAVILY_API_KEY",
     )
     tool = WebSearchTool(
         config=cfg,
-        env={"GOOGLE_CSE_API_KEY": "fake-key"},
+        env={"TAVILY_API_KEY": "fake-key"},
         client=fake_client,
     )
     out = tool.search("hello", max_results=2)
 
-    assert out.provider == "google"
+    assert out.provider == "tavily"
     assert out.query == "hello"
     assert len(out.results) == 2
     assert out.results[0]["url"] == "https://example.com/a"
-    assert fake_client.last_params is not None
-    assert fake_client.last_params["cx"] == "cx123"
-    assert fake_client.last_params["key"] == "fake-key"
+    assert fake_client.last_json is not None
+    assert fake_client.last_json["query"] == "hello"
+    assert fake_client.last_json["api_key"] == "fake-key"
 
 
-def test_web_search_tool_google_requires_api_key_env() -> None:
+def test_web_search_tool_tavily_requires_api_key_env() -> None:
     cfg = WebSearchConfig(
-        provider="google",
-        google_cse_id="cx",
-        google_api_key_env="GOOGLE_CSE_API_KEY",
+        provider="tavily",
+        tavily_api_key_env="TAVILY_API_KEY",
     )
-    tool = WebSearchTool(config=cfg, env={}, client=_FakeClient({}))
-    with pytest.raises(ValueError, match="GOOGLE_CSE_API_KEY"):
+    tool = WebSearchTool(config=cfg, env={},
+                         client=_FakeClient({"results": []}))
+    with pytest.raises(ValueError, match="TAVILY_API_KEY"):
         tool.search("q")
