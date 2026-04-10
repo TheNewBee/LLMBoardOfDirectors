@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 import os
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -73,6 +74,15 @@ class AgentConfig(BaseModel):
                                        float] = Field(default_factory=dict)
     staleness_threshold_days: int = Field(default=7, gt=0)
     model_config_override: ModelConfig | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_agent_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError(
+                "id must contain only letters, numbers, underscores, or hyphens"
+            )
+        return value
 
     @field_validator("personality_traits")
     @classmethod

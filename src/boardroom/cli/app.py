@@ -10,12 +10,14 @@ from dotenv import load_dotenv
 from boardroom import __version__
 from boardroom.cli.agents import agents_app
 from boardroom.cli.briefing import briefing_app
+from boardroom.cli.custom import custom_app
 from boardroom.cli.history import history_app
 from boardroom.cli.meet import meet_command
 
 app = typer.Typer(help="Autonomous adversarial boardroom.")
 app.add_typer(briefing_app, name="briefing")
 app.add_typer(agents_app, name="agents")
+app.add_typer(custom_app, name="custom")
 app.add_typer(history_app, name="history")
 app.command(
     "meet",

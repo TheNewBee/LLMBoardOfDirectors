@@ -20,7 +20,14 @@ class PersonaEngine:
         self._style = style or StyleEnforcer()
         self._bias = bias or BiasApplicator()
 
-    def apply_persona(self, persona: PersonaConfig, briefing: Briefing | None = None) -> str:
+    def apply_persona(
+        self,
+        persona: PersonaConfig,
+        briefing: Briefing | None = None,
+        *,
+        knowledge_context: str = "",
+        memory_context: str = "",
+    ) -> str:
         intro = role_template(persona.role).format(
             name=persona.name,
             expertise=persona.expertise,
@@ -41,6 +48,10 @@ class PersonaEngine:
                 f"Chair briefing (context): {briefing.text.strip()}\n"
                 f"Meeting objectives: {objectives}.{alpha_note}"
             )
+        if knowledge_context:
+            blocks.append(knowledge_context)
+        if memory_context:
+            blocks.append(memory_context)
         return "\n\n".join(blocks)
 
     def validate_consistency(

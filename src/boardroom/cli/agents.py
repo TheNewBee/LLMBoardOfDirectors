@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from boardroom.config import load_config
 from boardroom.llm.router import LLMRouter
-from boardroom.models import AppConfig, MeetingLLMSelection, MeetingState
+from boardroom.models import AgentRole, AppConfig, MeetingLLMSelection, MeetingState
 from boardroom.registry import AgentRegistry, AgentSelectionError
 from boardroom.secrets import CredentialStore, CredentialStoreError
 from boardroom.selection.parse import parse_key_value_floats, parse_key_value_strings
@@ -27,14 +27,15 @@ agents_app.add_typer(key_app, name="key")
 
 @agents_app.command("list")
 def list_agents() -> None:
-    """Print built-in agents with roles, expertise, and biases."""
+    """Print all agents (built-in + custom) with roles, expertise, and biases."""
     reg = AgentRegistry()
     lines: list[str] = []
     for aid in reg.list_agent_ids():
         cfg = reg.get_config(aid)
         bias_names = ", ".join(b.value for b in cfg.biases) or "(none)"
+        tag = "custom" if cfg.role == AgentRole.CUSTOM else cfg.role.value
         lines.append(
-            f"{aid} — {cfg.name} ({cfg.role.value})\n"
+            f"{aid} — {cfg.name} ({tag})\n"
             f"  Expertise: {cfg.expertise_domain}\n"
             f"  Biases: {bias_names}\n"
             f"  Default bias intensity: {cfg.bias_intensity}\n",

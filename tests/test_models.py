@@ -49,6 +49,17 @@ def test_agent_config_accepts_model_override() -> None:
     assert agent.model_config_override.model == "openai/gpt-4o"
 
 
+def test_agent_config_rejects_unsafe_id_characters() -> None:
+    with pytest.raises(ValidationError, match="letters, numbers, underscores, or hyphens"):
+        AgentConfig(
+            id="../escape",
+            name="Unsafe",
+            role=AgentRole.CUSTOM,
+            expertise_domain="security",
+            personality_traits=["careful"],
+        )
+
+
 def test_briefing_rejects_alpha_content_without_files() -> None:
     with pytest.raises(ValidationError):
         Briefing(

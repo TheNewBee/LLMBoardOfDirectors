@@ -14,6 +14,9 @@ from boardroom.transcript import TranscriptManager
 from boardroom.orchestrator.turn_selector import TurnSelector
 from boardroom.registry import AgentRegistry
 from boardroom.vector_store import MeetingVectorStore
+from boardroom.knowledge.context import build_agent_context_parts
+from boardroom.knowledge.store import KnowledgeVectorStore
+from boardroom.memory.agent_memory import AgentMemoryStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -115,6 +118,8 @@ class MeetingOrchestrator:
         self._tool_hook_mode = self._detect_tool_hook_mode(self._tool_hook)
         self._before_agent_turn = before_agent_turn
         self._after_agent_message = after_agent_message
+        self._knowledge_store: KnowledgeVectorStore | None = None
+        self._memory_store: AgentMemoryStore | None = None
         self._graph: CompiledStateGraph = self._build_graph()
 
     def start_meeting(
@@ -177,6 +182,12 @@ class MeetingOrchestrator:
                     "Vector store upsert failed meeting_id=%s",
                     final_meeting.meeting_id,
                 )
+        else:
+            _LOG.info(
+                "Vector store disabled; skipping transcript embedding upsert meeting_id=%s",
+                final_meeting.meeting_id,
+            )
+        self._persist_agent_memories(final_meeting)
         _LOG.info(
             "Meeting orchestration completed meeting_id=%s turns=%d termination=%s",
             final_meeting.meeting_id,
@@ -200,11 +211,14 @@ class MeetingOrchestrator:
 
         def initialize(state: MeetingGraphState) -> dict[str, object]:
             meeting = state["meeting"]
+            kb_ctx, mem_ctx = self._load_knowledge_and_memory(meeting)
             initialized = self._registry.initialize_selected(
                 meeting.selected_agents,
                 meeting.briefing,
                 meeting=meeting,
                 validate=False,
+                knowledge_by_agent=kb_ctx,
+                memory_by_agent=mem_ctx,
             )
             agent_configs = {row.agent_id: row.config for row in initialized}
             prompts = {row.agent_id: row.system_prompt for row in initialized}
@@ -324,6 +338,79 @@ class MeetingOrchestrator:
                 message.agent_id,
             )
             raise
+
+    def _load_knowledge_and_memory(
+        self, meeting: MeetingState
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Attempt to load knowledge and memory context for each agent. Failures are non-fatal."""
+        kb_ctx: dict[str, str] = {}
+        mem_ctx: dict[str, str] = {}
+        if not self._app_config.vector_store.enabled:
+            _LOG.info(
+                "Vector store disabled; knowledge/memory augmentation skipped meeting_id=%s",
+                meeting.meeting_id,
+            )
+            return kb_ctx, mem_ctx
+
+        kb_store = self._get_knowledge_store()
+        mem_store = self._get_memory_store()
+        for aid in meeting.selected_agents:
+            kb_section, mem_section = build_agent_context_parts(
+                agent_id=aid,
+                briefing_text=meeting.briefing.text,
+                knowledge_store=kb_store,
+                memory_store=mem_store,
+            )
+            if kb_section:
+                kb_ctx[aid] = kb_section
+            if mem_section:
+                mem_ctx[aid] = mem_section
+        return kb_ctx, mem_ctx
+
+    def _persist_agent_memories(self, meeting: MeetingState) -> None:
+        """Extract and persist per-agent memories after meeting ends."""
+        if not self._app_config.vector_store.enabled:
+            _LOG.info(
+                "Vector store disabled; agent memory persistence skipped meeting_id=%s",
+                meeting.meeting_id,
+            )
+            return
+        if not meeting.messages:
+            return
+        try:
+            mem_store = self._get_memory_store()
+            items = AgentMemoryStore.extract_from_messages(
+                messages=meeting.messages, meeting_id=meeting.meeting_id
+            )
+            by_agent: dict[str, list[object]] = {}
+            for item in items:
+                by_agent.setdefault(item.agent_id, []).append(item)
+            for aid, agent_items in by_agent.items():
+                mem_store.store_memories(aid, agent_items)
+            _LOG.info(
+                "Persisted %d agent memory items for meeting=%s",
+                len(items), meeting.meeting_id,
+            )
+        except (OSError, RuntimeError, ValueError):
+            _LOG.warning("Agent memory persistence failed.", exc_info=True)
+        except Exception:
+            _LOG.exception(
+                "Unexpected memory persistence failure meeting_id=%s",
+                meeting.meeting_id,
+            )
+            raise
+
+    def _get_knowledge_store(self) -> KnowledgeVectorStore:
+        if self._knowledge_store is None:
+            vs_dir = self._app_config.vector_store.persist_dir
+            self._knowledge_store = KnowledgeVectorStore(persist_dir=vs_dir / "knowledge")
+        return self._knowledge_store
+
+    def _get_memory_store(self) -> AgentMemoryStore:
+        if self._memory_store is None:
+            vs_dir = self._app_config.vector_store.persist_dir
+            self._memory_store = AgentMemoryStore(persist_dir=vs_dir / "memory")
+        return self._memory_store
 
     @classmethod
     def _detect_tool_hook_mode(
