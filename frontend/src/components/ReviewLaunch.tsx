@@ -6,15 +6,19 @@ type Props = {
 };
 
 export function ReviewLaunch({ briefingText, agents, disabled, onLaunch }: Props) {
+  const hasBriefing = briefingText.trim().length > 0;
+
   return (
-    <section className="card">
-      <h3>3. Review and Launch</h3>
-      <p className="muted">{briefingText || "Add a briefing topic to continue."}</p>
+    <section className="card launch-card">
+      <div className="card-heading">
+        <p className="eyebrow">Launch checklist</p>
+        <h3>Ready to start?</h3>
+      </div>
+      <p className="launch-summary">{hasBriefing ? briefingText : "Add a briefing topic to continue."}</p>
       <p className="muted">Agents: {agents.length ? agents.join(", ") : "None selected"}</p>
       <button disabled={disabled} onClick={onLaunch} type="button">
-        Start Meeting
+        Start meeting
       </button>
     </section>
   );
 }
-

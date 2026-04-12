@@ -13,7 +13,6 @@ import {
 } from "./api";
 import { AgentSelector } from "./components/AgentSelector";
 import { BriefingDialog } from "./components/BriefingDialog";
-import { MeetingControls } from "./components/MeetingControls";
 import { MeetingStatus } from "./components/MeetingStatus";
 import { MessageBubble } from "./components/MessageBubble";
 import { OutputsPanel } from "./components/OutputsPanel";
@@ -21,7 +20,7 @@ import { ReviewLaunch } from "./components/ReviewLaunch";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { useMeetingSocket } from "./hooks/useMeetingSocket";
-import type { BriefingForm } from "./types";
+import type { BriefingForm, MeetingEvent } from "./types";
 
 const initialBriefing: BriefingForm = {
   text: "",
@@ -36,6 +35,10 @@ function defaultSelection(agents: AgentSummary[]): string[] {
   const fallback = agents.find((agent) => agent.id !== adversary)?.id;
   const picks = [adversary, fallback].filter(Boolean) as string[];
   return picks.length >= 2 ? picks : agents.slice(0, 2).map((agent) => agent.id);
+}
+
+function hasMeetingId(event: MeetingEvent): event is MeetingEvent & { meeting_id: string } {
+  return "meeting_id" in event;
 }
 
 export default function App() {
@@ -60,11 +63,24 @@ export default function App() {
   const events = socket.events;
   const turnStarts = events.filter((event) => event.type === "turn_start");
   const messages = events.filter((event) => event.type === "turn_complete");
-  const activeSpeaker =
-    turnStarts.length > 0 ? turnStarts[turnStarts.length - 1].agent_name : null;
+  const latestTurnStart = turnStarts.length > 0 ? turnStarts[turnStarts.length - 1] : null;
+  const isBusy =
+    socket.status === "connecting" || socket.status === "running" || socket.status === "cancelling";
+  const activeSpeaker = isBusy && latestTurnStart ? latestTurnStart.agent_name : null;
+  const currentTurn =
+    isBusy && latestTurnStart && turnStarts.length > messages.length ? latestTurnStart : null;
+  const latestMeetingId = [...events].reverse().find(hasMeetingId)?.meeting_id ?? null;
+  const terminalError =
+    [...events]
+      .reverse()
+      .find((event): event is Extract<MeetingEvent, { type: "error" }> => event.type === "error") ??
+    null;
   const outputsEvent = [...events]
     .reverse()
-    .find((event) => event.type === "meeting_complete" || event.type === "meeting_cancelled");
+    .find(
+      (event): event is Extract<MeetingEvent, { type: "meeting_complete" | "meeting_cancelled" }> =>
+        event.type === "meeting_complete" || event.type === "meeting_cancelled"
+    );
   const outputs = outputsEvent ? outputsEvent.outputs : null;
 
   const canStart = useMemo(() => {
@@ -73,7 +89,8 @@ export default function App() {
       agents.length >= 2 &&
       agents.includes("adversary") &&
       socket.status !== "running" &&
-      socket.status !== "connecting"
+      socket.status !== "connecting" &&
+      socket.status !== "cancelling"
     );
   }, [briefing.text, agents, socket.status]);
 
@@ -218,49 +235,96 @@ export default function App() {
         onNewMeeting={createNewMeeting}
         onOpenSettings={() => setSettingsOpen(true)}
       />
-      <main className="main">
-        {toast ? <div className="toast">{toast}</div> : null}
-        <BriefingDialog value={briefing} onChange={setBriefing} />
-        <AgentSelector
-          agents={availableAgents}
-          modelOptions={modelOptions}
-          selected={agents}
-          modelsByAgent={modelsByAgent}
-          onChange={setAgents}
-          onModelsChange={setModelsByAgent}
-        />
-        <ReviewLaunch
-          briefingText={briefing.text}
-          agents={agents}
-          disabled={!canStart}
-          onLaunch={startMeeting}
-        />
+      <main className="main-shell">
+        {toast ? (
+          <div className="toast" role="status">
+            {toast}
+          </div>
+        ) : null}
+        <div className={isBusy ? "meeting-shell meeting-shell-busy" : "meeting-shell"}>
+          <section className="meeting-workspace" aria-labelledby="live-meeting-title">
+            <MeetingStatus
+              status={socket.status}
+              activeSpeaker={activeSpeaker}
+              turns={messages.length}
+              meetingId={latestMeetingId}
+              canCancel={socket.status === "running"}
+              onCancel={socket.cancel}
+            />
 
-        <section className="card">
-          <h3>Live Meeting</h3>
-          <MeetingStatus
-            status={socket.status}
-            activeSpeaker={activeSpeaker}
-            turns={messages.length}
-          />
-          <MeetingControls canCancel={socket.status === "running"} onCancel={socket.cancel} />
-          <div className="message-list">
-            {messages.length === 0 ? (
-              <p className="muted">No turns yet.</p>
-            ) : (
-              messages.map((message, idx) => (
+            {terminalError ? (
+              <div className={terminalError.fatal ? "error-panel error-panel-fatal" : "error-panel"}>
+                <strong>Meeting error</strong>
+                <p>{terminalError.message}</p>
+                <small>
+                  {terminalError.code} {terminalError.fatal ? "· Fatal" : "· Recoverable"}
+                </small>
+              </div>
+            ) : null}
+
+            <div className="conversation" role="log" aria-live="polite" aria-label="Live meeting transcript">
+              {messages.length === 0 && !currentTurn ? (
+                <div className="empty-transcript">
+                  <p className="eyebrow">Live meeting</p>
+                  <h2>Start a meeting to watch the board think in real time.</h2>
+                  <p>
+                    Active speaker, completed turns, tool activity, and final artifacts will stay visible
+                    here instead of being buried below setup.
+                  </p>
+                </div>
+              ) : null}
+
+              {messages.map((message, idx) => (
                 <MessageBubble
-                  key={`${message.agent_id}-${idx}`}
+                  key={`${message.meeting_id}-${message.agent_id}-${message.timestamp}-${idx}`}
                   agentId={message.agent_id}
                   agentName={message.agent_name}
                   content={message.content}
+                  timestamp={message.timestamp}
+                  toolCount={message.tool_results.length}
+                  turnNumber={idx + 1}
                 />
-              ))
-            )}
-          </div>
-        </section>
+              ))}
 
-        <OutputsPanel outputs={outputs} />
+              {currentTurn ? (
+                <article className="thinking-row" aria-live="polite">
+                  <span className="thinking-pulse" aria-hidden="true" />
+                  <div>
+                    <strong>{currentTurn.agent_name} is thinking</strong>
+                    <span>
+                      Turn {currentTurn.turn_number} · {currentTurn.role}
+                    </span>
+                  </div>
+                </article>
+              ) : null}
+            </div>
+
+            <OutputsPanel outputs={outputs} />
+          </section>
+
+          <aside className={isBusy ? "setup-panel setup-panel-collapsed" : "setup-panel"} aria-label="Meeting setup">
+            <div className="setup-intro">
+              <p className="eyebrow">Setup</p>
+              <h2>Shape the boardroom</h2>
+              <p>Define the brief, choose agents, then launch. The live process stays primary once it starts.</p>
+            </div>
+            <BriefingDialog value={briefing} onChange={setBriefing} />
+            <AgentSelector
+              agents={availableAgents}
+              modelOptions={modelOptions}
+              selected={agents}
+              modelsByAgent={modelsByAgent}
+              onChange={setAgents}
+              onModelsChange={setModelsByAgent}
+            />
+            <ReviewLaunch
+              briefingText={briefing.text}
+              agents={agents}
+              disabled={!canStart}
+              onLaunch={startMeeting}
+            />
+          </aside>
+        </div>
       </main>
       <SettingsDrawer
         open={settingsOpen}
@@ -276,25 +340,15 @@ export default function App() {
         onValidateApiKey={handleValidateApiKey}
         onDefaultModelChange={(next) => {
           setDefaultModel(next);
-          void persistConfig(
-            { default_model: { model: next } },
-            "Default model updated."
-          );
+          void persistConfig({ default_model: { model: next } }, "Default model updated.");
         }}
         onTemperatureChange={(next) => {
           setTemperature(next);
-          void persistConfig(
-            { default_model: { temperature: next } },
-            "Temperature updated."
-          );
+          void persistConfig({ default_model: { temperature: next } }, "Temperature updated.");
         }}
         onWebSearchEnabledChange={(next) => {
           setWebSearchEnabled(next);
-          setToast(
-            next
-              ? "Web search enabled for new meetings."
-              : "Web search disabled for new meetings."
-          );
+          setToast(next ? "Web search enabled for new meetings." : "Web search disabled for new meetings.");
         }}
         onRefreshKnowledge={handleRefreshKnowledge}
         onClose={() => setSettingsOpen(false)}

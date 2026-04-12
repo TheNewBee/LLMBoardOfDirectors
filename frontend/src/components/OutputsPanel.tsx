@@ -8,20 +8,36 @@ type Props = {
   outputs: Outputs | null;
 };
 
+const outputLabels: Array<{ key: keyof Outputs; label: string }> = [
+  { key: "transcript", label: "Transcript" },
+  { key: "kill_sheet", label: "Kill sheet" },
+  { key: "consensus_roadmap", label: "Consensus roadmap" }
+];
+
 export function OutputsPanel({ outputs }: Props) {
+  if (!outputs) {
+    return (
+      <section className="outputs-panel outputs-panel-empty" aria-label="Meeting artifacts">
+        <p className="eyebrow">Artifacts</p>
+        <p className="muted">Transcript, kill sheet, and consensus roadmap appear here when the meeting ends.</p>
+      </section>
+    );
+  }
+
   return (
-    <section className="card">
-      <h3>Outputs</h3>
-      {!outputs ? (
-        <p className="muted">Outputs will appear after meeting completion.</p>
-      ) : (
-        <ul className="outputs-list">
-          <li>Transcript: {outputs.transcript ?? "N/A"}</li>
-          <li>Kill sheet: {outputs.kill_sheet ?? "N/A"}</li>
-          <li>Consensus roadmap: {outputs.consensus_roadmap ?? "N/A"}</li>
-        </ul>
-      )}
+    <section className="outputs-panel" aria-label="Meeting artifacts">
+      <div>
+        <p className="eyebrow">Artifacts ready</p>
+        <h2>Meeting outputs</h2>
+      </div>
+      <ul className="outputs-list">
+        {outputLabels.map((item) => (
+          <li key={item.key}>
+            <span>{item.label}</span>
+            <code>{outputs[item.key] ?? "N/A"}</code>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
-

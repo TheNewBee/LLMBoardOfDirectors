@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+
 type Props = {
   open: boolean;
   hasApiKey: boolean;
@@ -35,9 +37,41 @@ export function SettingsDrawer({
   onRefreshKnowledge,
   onClose
 }: Props) {
+  const [modelFilter, setModelFilter] = useState("");
+
+  const allModelOptions = useMemo(() => {
+    return Array.from(new Set([defaultModel, ...modelOptions].filter(Boolean)));
+  }, [defaultModel, modelOptions]);
+
+  const matchedModelOptions = useMemo(() => {
+    const normalizedFilter = modelFilter.trim().toLowerCase();
+    if (!normalizedFilter) {
+      return allModelOptions;
+    }
+    return allModelOptions.filter((model) => model.toLowerCase().includes(normalizedFilter));
+  }, [allModelOptions, modelFilter]);
+
+  const filteredModelOptions = useMemo(() => {
+    if (!defaultModel || matchedModelOptions.includes(defaultModel)) {
+      return matchedModelOptions;
+    }
+    return [defaultModel, ...matchedModelOptions];
+  }, [defaultModel, matchedModelOptions]);
+
+  useEffect(() => {
+    if (open) {
+      setModelFilter("");
+    }
+  }, [open]);
+
   if (!open) {
     return null;
   }
+
+  const hasActiveModelFilter = modelFilter.trim().length > 0;
+  const searchPlaceholder =
+    allModelOptions.length > 0 ? `Search ${allModelOptions.length} models` : "Search models";
+
   return (
     <div className="drawer-backdrop" onClick={onClose} role="presentation">
       <aside className="drawer" onClick={(event) => event.stopPropagation()}>
@@ -61,8 +95,22 @@ export function SettingsDrawer({
         </div>
         <label>
           Default model
+          <input
+            type="search"
+            value={modelFilter}
+            onChange={(event) => setModelFilter(event.target.value)}
+            placeholder={searchPlaceholder}
+            aria-label="Search models"
+          />
+          <p className="field-help muted">
+            {hasActiveModelFilter
+              ? matchedModelOptions.length > 0
+                ? `Showing ${matchedModelOptions.length} matching model${matchedModelOptions.length === 1 ? "" : "s"}.`
+                : "No matches found. The current selection stays available below."
+              : `Showing all ${allModelOptions.length} models.`}
+          </p>
           <select value={defaultModel} onChange={(event) => onDefaultModelChange(event.target.value)}>
-            {modelOptions.map((model) => (
+            {filteredModelOptions.map((model) => (
               <option key={model} value={model}>
                 {model}
               </option>

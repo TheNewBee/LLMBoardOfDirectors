@@ -32,15 +32,20 @@ export function AgentSelector({
   };
 
   return (
-    <section className="card">
-      <h3>2. Agent Selection (2-6)</h3>
-      <div className="agent-grid">
+    <section className="card setup-card">
+      <div className="card-heading">
+        <p className="eyebrow">Agents</p>
+        <h3>Select 2–6 voices</h3>
+      </div>
+      <div className="agent-grid" aria-label="Available agents">
         {agents.map((agent) => (
           <button
             key={agent.id}
             className={selected.includes(agent.id) ? "chip chip-active" : "chip"}
             onClick={() => toggle(agent.id)}
             type="button"
+            aria-pressed={selected.includes(agent.id)}
+            title={agent.expertise_domain}
           >
             {agent.name}
           </button>
@@ -50,7 +55,7 @@ export function AgentSelector({
         <div className="agent-models">
           <h4>Per-agent models</h4>
           {selected.map((agentId) => (
-            <label key={agentId}>
+            <label className="field" key={agentId}>
               {agentId}
               <select
                 value={modelsByAgent[agentId] ?? ""}
@@ -79,4 +84,3 @@ export function AgentSelector({
     </section>
   );
 }
-

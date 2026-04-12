@@ -7,9 +7,12 @@ type Props = {
 
 export function BriefingDialog({ value, onChange }: Props) {
   return (
-    <section className="card">
-      <h3>1. Briefing</h3>
-      <label>
+    <section className="card setup-card">
+      <div className="card-heading">
+        <p className="eyebrow">Briefing</p>
+        <h3>What should the board debate?</h3>
+      </div>
+      <label className="field">
         Topic
         <textarea
           value={value.text}
@@ -18,8 +21,8 @@ export function BriefingDialog({ value, onChange }: Props) {
           placeholder="Should we launch in EU this quarter?"
         />
       </label>
-      <label>
-        Objectives (one per line)
+      <label className="field">
+        Objectives <span>(one per line)</span>
         <textarea
           value={value.objectives}
           onChange={(event) => onChange({ ...value, objectives: event.target.value })}
@@ -30,4 +33,3 @@ export function BriefingDialog({ value, onChange }: Props) {
     </section>
   );
 }
-
