@@ -1,0 +1,209 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #e6ebff;
+  background: #0e1320;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0e1320;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  padding: 20px;
+  border-right: 1px solid #26314d;
+  background: #111827;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.main {
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid #26314d;
+  background: #151d30;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+textarea {
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 12px;
+  background: #0f1524;
+  border: 1px solid #3c4968;
+  color: #eef2ff;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+input,
+select {
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 12px;
+  background: #0f1524;
+  border: 1px solid #3c4968;
+  color: #eef2ff;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+button {
+  border: 1px solid #3e60ff;
+  background: #3152e1;
+  color: white;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
+button.secondary {
+  border-color: #4b5978;
+  background: #1f2a44;
+}
+
+button.danger {
+  border-color: #ad3f59;
+  background: #8c2b44;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip {
+  border-color: #475b88;
+  background: #202e4d;
+}
+
+.chip-active {
+  border-color: #4bd7c5;
+  background: #1f5f77;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.message-list {
+  display: grid;
+  gap: 10px;
+}
+
+.message {
+  border: 1px solid #2e3b5a;
+  border-radius: 8px;
+  padding: 12px;
+  background: #101828;
+}
+
+.badge {
+  display: inline-block;
+  background: #29395f;
+  padding: 4px 8px;
+  border-radius: 999px;
+  margin-right: 8px;
+}
+
+.muted {
+  color: #aab4cf;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.toast {
+  border: 1px solid #3552a8;
+  background: #1a2b5a;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.section-title {
+  margin-top: 16px;
+  font-weight: 700;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 360px;
+  height: 100%;
+  background: #111827;
+  border-left: 1px solid #2b3752;
+  padding: 18px;
+}
+
+.inline-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.knowledge ul {
+  padding-left: 18px;
+}
+
+.agent-models label {
+  display: block;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid #26314d;
+  }
+}
+

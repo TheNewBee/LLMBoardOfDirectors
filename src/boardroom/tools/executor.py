@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from boardroom.models import AgentRole, Message
+from boardroom.models import Message
 from boardroom.tools.python_executor import PythonExecutor
 from boardroom.tools.registry import PYTHON_EXEC_TOOL, WEB_SEARCH_TOOL
 from boardroom.tools.web_search import WebSearchTool
@@ -18,6 +18,7 @@ class ToolExecutor:
         *,
         python_executor: PythonExecutor | None = None,
         web_search_tool: WebSearchTool | None = None,
+        disabled_tools: set[str] | None = None,
     ) -> None:
         self._python = python_executor or PythonExecutor()
         self._web = web_search_tool or WebSearchTool()
@@ -25,15 +26,15 @@ class ToolExecutor:
             PYTHON_EXEC_TOOL.name: self._run_python_exec,
             WEB_SEARCH_TOOL.name: self._run_web_search,
         }
+        for tool_name in disabled_tools or set():
+            self._handlers.pop(tool_name, None)
 
     def apply_to_message(
         self,
         *,
         message: Message,
         raw_content: str,
-        agent_role: AgentRole | None = None,
     ) -> None:
-        _ = agent_role
         calls, parse_errors = self.parse_tool_calls(raw_content)
         if not calls and not parse_errors:
             return
@@ -41,8 +42,7 @@ class ToolExecutor:
             message.tool_calls = calls
         message.tool_results = [self._execute_single(call) for call in calls]
         for error in parse_errors:
-            message.tool_results.append(
-                {"name": "tool_parse", "ok": False, "error": error})
+            message.tool_results.append({"name": "tool_parse", "ok": False, "error": error})
         summary = self._summary_lines(message.tool_results)
         if summary:
             message.content = f"{message.content}\n\n{summary}"
@@ -67,8 +67,6 @@ class ToolExecutor:
         except json.JSONDecodeError:
             return [], "Tool block is not valid JSON."
         rows = payload if isinstance(payload, list) else [payload]
-        if not isinstance(rows, list):
-            return [], "Tool block must contain an object or a list of objects."
         out: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -87,8 +85,7 @@ class ToolExecutor:
     def _execute_single(self, call: dict[str, Any]) -> dict[str, Any]:
         try:
             name = str(call.get("name"))
-            args = call.get("args") if isinstance(
-                call.get("args"), dict) else {}
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
             handler = self._handlers.get(name)
             if handler is None:
                 return {"name": name, "ok": False, "error": f"Unsupported tool: {name}"}
@@ -138,6 +135,5 @@ class ToolExecutor:
             if ok:
                 lines.append(f"- {name}: ok")
             else:
-                lines.append(
-                    f"- {name}: error ({row.get('error', 'unknown')})")
+                lines.append(f"- {name}: error ({row.get('error', 'unknown')})")
         return "\n".join(lines)

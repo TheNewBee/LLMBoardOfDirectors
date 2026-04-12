@@ -27,18 +27,14 @@ def validate_meeting_ready_for_run(state: MeetingState) -> None:
             "This meeting already completed (termination_reason is set). Use a fresh state."
         )
     if state.messages:
-        raise ValueError(
-            "This state already has messages; use a fresh file from `agents select`.")
+        raise ValueError("This state already has messages; use a fresh file from `agents select`.")
     n = len(state.selected_agents)
     if n == 0:
-        raise ValueError(
-            "No agents selected. Run `boardroom agents select` first.")
+        raise ValueError("No agents selected. Run `boardroom agents select` first.")
     if n == 1:
-        raise ValueError(
-            "At least two agents are required. Run `boardroom agents select` again.")
+        raise ValueError("At least two agents are required. Run `boardroom agents select` again.")
     if state.llm is None:
-        raise ValueError(
-            "Missing persisted LLM selection. Run `boardroom agents select` first.")
+        raise ValueError("Missing persisted LLM selection. Run `boardroom agents select` first.")
 
 
 def _termination_for_cli_max_turns(max_turns: int | None) -> TerminationDetector:
@@ -68,8 +64,7 @@ def meet_command(
     ],
     config_path: Annotated[
         Path | None,
-        typer.Option("--config", exists=True,
-                     help="Optional config.yaml path."),
+        typer.Option("--config", exists=True, help="Optional config.yaml path."),
     ] = None,
     max_turns: Annotated[
         int | None,
@@ -99,23 +94,20 @@ def meet_command(
     try:
         validate_meeting_ready_for_run(state)
     except ValueError as exc:
-        _LOG.exception(
-            "Meeting state is not ready meeting_id=%s", state.meeting_id)
+        _LOG.exception("Meeting state is not ready meeting_id=%s", state.meeting_id)
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
     app_config = load_config(config_path)
     if outputs_dir is not None:
         app_config = app_config.model_copy(
-            update={"paths": app_config.paths.model_copy(
-                update={"outputs_dir": outputs_dir})}
+            update={"paths": app_config.paths.model_copy(update={"outputs_dir": outputs_dir})}
         )
 
     reg = AgentRegistry()
     router = LLMRouter()
     tools = ToolExecutor(
-        web_search_tool=WebSearchTool(
-            config=app_config.web_search, env=os.environ),
+        web_search_tool=WebSearchTool(config=app_config.web_search, env=os.environ),
     )
     termination = _termination_for_cli_max_turns(max_turns)
     _LOG.info(
@@ -133,8 +125,7 @@ def meet_command(
 
     def after_message(meeting: MeetingState, message: Message) -> None:
         _ = meeting
-        typer.echo(
-            f"\n{message.agent_name} ({message.agent_id}):\n{message.content}\n")
+        typer.echo(f"\n{message.agent_name} ({message.agent_id}):\n{message.content}\n")
         if message.tool_results:
             typer.echo("Tool results:")
             for row in message.tool_results:
@@ -144,19 +135,16 @@ def meet_command(
 
     def tool_hook(*, meeting: MeetingState, message: Message, raw_content: str) -> None:
         _ = meeting
-        role = reg.get_config(message.agent_id).role
         try:
-            tools.apply_to_message(
-                message=message,
-                raw_content=raw_content,
-                agent_role=role,
-            )
+            tools.apply_to_message(message=message, raw_content=raw_content)
         except Exception as exc:  # pragma: no cover - guarded by tool tests
-            _LOG.exception("Recoverable tool error meeting_id=%s agent_id=%s",
-                           state.meeting_id, message.agent_id)
+            _LOG.exception(
+                "Recoverable tool error meeting_id=%s agent_id=%s",
+                state.meeting_id,
+                message.agent_id,
+            )
             message.tool_results.append(
-                {"name": "tool_runtime", "ok": False,
-                    "error": f"recoverable tool error: {exc}"}
+                {"name": "tool_runtime", "ok": False, "error": f"recoverable tool error: {exc}"}
             )
 
     orch = MeetingOrchestrator(
@@ -192,8 +180,7 @@ def meet_command(
         if tr.kill_sheet_path is not None:
             typer.echo(f"Kill sheet: {tr.kill_sheet_path.resolve()}")
         if tr.consensus_roadmap_path is not None:
-            typer.echo(
-                f"Consensus roadmap: {tr.consensus_roadmap_path.resolve()}")
+            typer.echo(f"Consensus roadmap: {tr.consensus_roadmap_path.resolve()}")
     typer.echo(f"Meeting id: {final.meeting_id}")
 
 

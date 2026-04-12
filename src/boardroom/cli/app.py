@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
+from typing import Annotated
 
 import typer
 from dotenv import load_dotenv
@@ -47,13 +47,8 @@ def _configure_logging() -> None:
 @app.callback()
 def main() -> None:
     """Boardroom CLI entrypoint."""
-    # First, load a standard .env alongside the project (if present).
+    # Load `.env` from the current working directory (e.g. repo root), if present.
     load_dotenv()
-
-    # Also support a repo-local env layout: ./env/board.env
-    alt_env_path = Path("env") / "board.env"
-    if alt_env_path.exists():
-        load_dotenv(alt_env_path, override=False)
     _configure_logging()
 
 
@@ -61,3 +56,33 @@ def main() -> None:
 def version() -> None:
     """Show package version."""
     typer.echo(__version__)
+
+
+@app.command("serve")
+def serve(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Host to bind the web server to."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", min=1, max=65535, help="Port to bind the web server to."),
+    ] = 8000,
+    allow_insecure_host: Annotated[
+        bool,
+        typer.Option(
+            "--allow-insecure-host",
+            help="Allow non-localhost host binding without authentication safeguards.",
+        ),
+    ] = False,
+) -> None:
+    """Launch the Boardroom web API + UI server (localhost-only by default)."""
+    import uvicorn
+
+    if host not in {"127.0.0.1", "localhost"} and not allow_insecure_host:
+        raise typer.BadParameter(
+            "Non-localhost binding is unauthenticated. "
+            "Use --allow-insecure-host only behind your own auth/proxy."
+        )
+
+    uvicorn.run("boardroom.api.main:app", host=host, port=port, reload=False)

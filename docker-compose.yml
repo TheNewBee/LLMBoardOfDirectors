@@ -1,0 +1,36 @@
+# Boardroom web UI + API
+#
+# Setup:
+#   Copy .env.example to .env and set OPENROUTER_API_KEY (Compose loads .env for ${...}).
+# Run:
+#   docker compose up --build
+# Open:
+#   http://localhost:18000
+
+services:
+  boardroom:
+    build: .
+    image: boardroom:latest
+    ports:
+      # Windows may reserve common ports like 8000; override with BOARDROOM_HOST_PORT if needed.
+      - "${BOARDROOM_HOST_PORT:-18000}:8000"
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BOARDROOM_CREDENTIAL_KEY: ${BOARDROOM_CREDENTIAL_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+    volumes:
+      # Persist Chroma vector store, encrypted keys, custom agents (paths from config.yaml)
+      - boardroom_data:/app/.boardroom
+      # Meeting transcript artifacts
+      - boardroom_transcripts:/app/transcripts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  boardroom_data:
+  boardroom_transcripts:

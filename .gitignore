@@ -6,6 +6,7 @@ __pycache__/
 .coverage
 build/
 dist/
+node_modules/
 *.egg-info/
 artifacts/
 transcripts/
@@ -13,3 +14,4 @@ transcripts/
 .kiro
 TRIVIAL_FIXES.md
 CONTRIBUTING.md
+.omx/
