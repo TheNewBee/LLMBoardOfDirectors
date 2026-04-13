@@ -1,5 +1,28 @@
 export type MeetingEvent =
   | { type: "meeting_started"; meeting_id: string }
+  | { type: "turn_chunk"; meeting_id: string; agent_id: string; chunk: string }
+  | {
+      type: "meeting_state.v2";
+      version: "2";
+      meeting_id: string;
+      phase: "prepare" | "live" | "recover" | "wrap_up";
+      status: "running" | "waiting_retry" | "recovered" | "completed" | "failed_terminal";
+      error_category:
+        | "none"
+        | "rate_limited"
+        | "provider_unavailable"
+        | "timeout"
+        | "missing_api_key"
+        | "unknown";
+      terminal: boolean;
+      retry: {
+        attempt: number | null;
+        max_attempts: number | null;
+        next_retry_ms: number | null;
+      };
+      user_message: string;
+      ts: string;
+    }
   | {
       type: "turn_start";
       meeting_id: string;
