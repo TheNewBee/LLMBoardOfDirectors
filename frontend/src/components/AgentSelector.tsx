@@ -1,86 +1,161 @@
+import { useEffect, useRef, useState } from "react";
 import type { AgentSummary } from "../api";
+import { agentColor } from "./MessageBubble";
 
 type Props = {
-  agents: AgentSummary[];
-  modelOptions: string[];
+  available: AgentSummary[];
   selected: string[];
   modelsByAgent: Record<string, string>;
+  modelOptions: string[];
+  disabled: boolean;
   onChange: (next: string[]) => void;
   onModelsChange: (next: Record<string, string>) => void;
 };
 
 export function AgentSelector({
-  agents,
-  modelOptions,
+  available,
   selected,
   modelsByAgent,
+  modelOptions,
+  disabled,
   onChange,
-  onModelsChange
+  onModelsChange,
 }: Props) {
-  const toggle = (agentId: string) => {
-    if (selected.includes(agentId)) {
-      onChange(selected.filter((item) => item !== agentId));
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [modelPopover, setModelPopover] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+        setModelPopover(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const toggleAgent = (id: string) => {
+    if (disabled) return;
+    if (selected.includes(id)) {
+      onChange(selected.filter((s) => s !== id));
       const next = { ...modelsByAgent };
-      delete next[agentId];
+      delete next[id];
       onModelsChange(next);
-      return;
+    } else if (selected.length < 6) {
+      onChange([...selected, id]);
+      setDropdownOpen(false);
     }
-    if (selected.length >= 6) {
-      return;
-    }
-    onChange([...selected, agentId]);
   };
 
+  const setModel = (agentId: string, model: string) => {
+    const next = { ...modelsByAgent };
+    if (!model) delete next[agentId];
+    else next[agentId] = model;
+    onModelsChange(next);
+    setModelPopover(null);
+  };
+
+  const unselected = available.filter((a) => !selected.includes(a.id));
+  const selectedAgents = selected
+    .map((id) => available.find((a) => a.id === id))
+    .filter((a): a is AgentSummary => Boolean(a));
+
   return (
-    <section className="card setup-card">
-      <div className="card-heading">
-        <p className="eyebrow">Agents</p>
-        <h3>Select 2–6 voices</h3>
-      </div>
-      <div className="agent-grid" aria-label="Available agents">
-        {agents.map((agent) => (
-          <button
-            key={agent.id}
-            className={selected.includes(agent.id) ? "chip chip-active" : "chip"}
-            onClick={() => toggle(agent.id)}
-            type="button"
-            aria-pressed={selected.includes(agent.id)}
-            title={agent.expertise_domain}
-          >
-            {agent.name}
-          </button>
-        ))}
-      </div>
-      {selected.length > 0 && modelOptions.length > 0 ? (
-        <div className="agent-models">
-          <h4>Per-agent models</h4>
-          {selected.map((agentId) => (
-            <label className="field" key={agentId}>
-              {agentId}
-              <select
-                value={modelsByAgent[agentId] ?? ""}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  const next = { ...modelsByAgent };
-                  if (!value) {
-                    delete next[agentId];
-                  } else {
-                    next[agentId] = value;
-                  }
-                  onModelsChange(next);
-                }}
+    <div className="header-agents" ref={dropdownRef}>
+      {selectedAgents.map((agent) => {
+        const color = agentColor(agent.id);
+        const model = modelsByAgent[agent.id];
+        return (
+          <div key={agent.id} style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: "0.2rem" }}>
+            <button
+              className={`agent-chip selected${disabled ? " disabled-chip" : ""}`}
+              onClick={() => !disabled && toggleAgent(agent.id)}
+              title={agent.expertise_domain}
+              type="button"
+            >
+              <span className="agent-chip-dot" style={{ background: color }} />
+              {agent.name}
+              {!disabled && (
+                <span
+                  className="agent-chip-remove"
+                  role="button"
+                  aria-label={`Remove ${agent.name}`}
+                  onClick={(e) => { e.stopPropagation(); toggleAgent(agent.id); }}
+                >
+                  ×
+                </span>
+              )}
+            </button>
+            {modelOptions.length > 0 && (
+              <button
+                className="model-popover-trigger"
+                title="Override model"
+                onClick={() => setModelPopover(modelPopover === agent.id ? null : agent.id)}
+                disabled={disabled}
               >
-                <option value="">Default model</option>
-                {modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
+                {model ? model.split("/").pop() : "default"}
+              </button>
+            )}
+            {modelPopover === agent.id && (
+              <div className="agent-dropdown" style={{ left: 0, top: "calc(100% + 4px)", minWidth: 200 }}>
+                <div className="agent-dropdown-header">Model for {agent.name}</div>
+                <button
+                  className={`agent-dropdown-item${!model ? " active" : ""}`}
+                  onClick={() => setModel(agent.id, "")}
+                >
+                  Default
+                </button>
+                {modelOptions.slice(0, 20).map((m) => (
+                  <button
+                    key={m}
+                    className={`agent-dropdown-item${model === m ? " active" : ""}`}
+                    onClick={() => setModel(agent.id, m)}
+                    title={m}
+                  >
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m}
+                    </span>
+                  </button>
                 ))}
-              </select>
-            </label>
-          ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {!disabled && selected.length < 6 && unselected.length > 0 && (
+        <div style={{ position: "relative" }}>
+          <button
+            className="agent-add-btn"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            title="Add agent"
+            type="button"
+          >
+            +
+          </button>
+          {dropdownOpen && (
+            <div className="agent-dropdown">
+              <div className="agent-dropdown-header">Add agent</div>
+              {unselected.map((agent) => (
+                <button
+                  key={agent.id}
+                  className="agent-dropdown-item"
+                  onClick={() => toggleAgent(agent.id)}
+                  title={agent.expertise_domain}
+                >
+                  <span className="agent-chip-dot" style={{ background: agentColor(agent.id), flexShrink: 0 }} />
+                  <span>
+                    {agent.name}
+                    <small style={{ display: "block" }}>{agent.expertise_domain}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      ) : null}
-    </section>
+      )}
+    </div>
   );
 }

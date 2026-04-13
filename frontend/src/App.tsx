@@ -1,50 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAgents,
-  fetchActiveMeetings,
   fetchConfig,
-  fetchKnowledgeStatus,
   fetchModels,
-  refreshKnowledge,
   storeKey,
   updateConfig,
   validateKey,
-  type AgentSummary
+  type AgentSummary,
 } from "./api";
 import { AgentSelector } from "./components/AgentSelector";
-import { BriefingDialog } from "./components/BriefingDialog";
-import { MeetingStatus } from "./components/MeetingStatus";
+import { ChatInput } from "./components/ChatInput";
 import { MessageBubble } from "./components/MessageBubble";
-import { OutputsPanel } from "./components/OutputsPanel";
-import { ReviewLaunch } from "./components/ReviewLaunch";
 import { SettingsDrawer } from "./components/SettingsDrawer";
-import { Sidebar } from "./components/Sidebar";
+import { StreamingMessage } from "./components/StreamingMessage";
 import { useMeetingSocket } from "./hooks/useMeetingSocket";
-import type { BriefingForm, MeetingEvent } from "./types";
 
-const initialBriefing: BriefingForm = {
-  text: "",
-  objectives: ""
+// Deterministic default: adversary + first non-adversary agent
+function defaultSelection(agents: AgentSummary[]): string[] {
+  if (agents.length === 0) return ["adversary", "strategist"];
+  const adversary = agents.find((a) => a.id === "adversary")?.id;
+  const fallback = agents.find((a) => a.id !== adversary)?.id;
+  const picks = [adversary, fallback].filter(Boolean) as string[];
+  return picks.length >= 2 ? picks : agents.slice(0, 2).map((a) => a.id);
+}
+
+type SystemMessage = {
+  id: string;
+  text: string;
+  variant: "info" | "error" | "success";
 };
 
-function defaultSelection(agents: AgentSummary[]): string[] {
-  if (agents.length === 0) {
-    return ["adversary", "strategist"];
-  }
-  const adversary = agents.find((agent) => agent.id === "adversary")?.id;
-  const fallback = agents.find((agent) => agent.id !== adversary)?.id;
-  const picks = [adversary, fallback].filter(Boolean) as string[];
-  return picks.length >= 2 ? picks : agents.slice(0, 2).map((agent) => agent.id);
-}
-
-function hasMeetingId(event: MeetingEvent): event is MeetingEvent & { meeting_id: string } {
-  return "meeting_id" in event;
-}
-
 export default function App() {
-  const [briefing, setBriefing] = useState<BriefingForm>(initialBriefing);
   const [availableAgents, setAvailableAgents] = useState<AgentSummary[]>([]);
-  const [agents, setAgents] = useState<string[]>([]);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, string>>({});
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState("");
@@ -52,280 +40,208 @@ export default function App() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [knowledgeStatus, setKnowledgeStatus] = useState<
-    Array<{ agent_id: string; stale: boolean; last_refresh: string | null }>
-  >([]);
-  const [toast, setToast] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [history, setHistory] = useState<Array<{ id: string; status: string }>>([]);
+  const [toast, setToast] = useState<string | null>(null);
+  const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
+
   const socket = useMeetingSocket();
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const events = socket.events;
-  const turnStarts = events.filter((event) => event.type === "turn_start");
-  const messages = events.filter((event) => event.type === "turn_complete");
-  const latestTurnStart = turnStarts.length > 0 ? turnStarts[turnStarts.length - 1] : null;
-  const isBusy =
-    socket.status === "connecting" || socket.status === "running" || socket.status === "cancelling";
-  const activeSpeaker = isBusy && latestTurnStart ? latestTurnStart.agent_name : null;
-  const currentTurn =
-    isBusy && latestTurnStart && turnStarts.length > messages.length ? latestTurnStart : null;
-  const latestMeetingId = [...events].reverse().find(hasMeetingId)?.meeting_id ?? null;
-  const terminalError =
-    [...events]
-      .reverse()
-      .find((event): event is Extract<MeetingEvent, { type: "error" }> => event.type === "error") ??
-    null;
-  const outputsEvent = [...events]
-    .reverse()
-    .find(
-      (event): event is Extract<MeetingEvent, { type: "meeting_complete" | "meeting_cancelled" }> =>
-        event.type === "meeting_complete" || event.type === "meeting_cancelled"
-    );
-  const outputs = outputsEvent ? outputsEvent.outputs : null;
+  const isBusy = useMemo(
+    () =>
+      socket.status === "connecting" ||
+      socket.status === "running" ||
+      socket.status === "recovering" ||
+      socket.status === "cancelling",
+    [socket.status]
+  );
 
-  const canStart = useMemo(() => {
-    return (
-      briefing.text.trim().length > 0 &&
-      agents.length >= 2 &&
-      agents.includes("adversary") &&
-      socket.status !== "running" &&
-      socket.status !== "connecting" &&
-      socket.status !== "cancelling"
-    );
-  }, [briefing.text, agents, socket.status]);
-
-  const startMeeting = () => {
-    const objectives = briefing.objectives
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    socket.connectAndStart({
-      briefing: { text: briefing.text, objectives },
-      agents,
-      models_by_agent: modelsByAgent,
-      enable_web_search: webSearchEnabled
-    });
-  };
-
-  const createNewMeeting = () => {
-    socket.reset();
-    setBriefing(initialBriefing);
-    setAgents(defaultSelection(availableAgents));
-    setModelsByAgent({});
-  };
-
+  // Load initial config/agents
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [agentsPayload, configPayload, modelsPayload, knowledgePayload] = await Promise.all([
+        const [agents, config, models] = await Promise.all([
           fetchAgents(),
           fetchConfig(),
-          fetchModels().catch(() => []),
-          fetchKnowledgeStatus().catch(() => [])
+          fetchModels().catch(() => [] as string[]),
         ]);
-        if (cancelled) {
-          return;
-        }
-        setAvailableAgents(agentsPayload);
-        setAgents(defaultSelection(agentsPayload));
-        setDefaultModel(configPayload.config.default_model.model);
-        setTemperature(configPayload.config.default_model.temperature);
-        setWebSearchEnabled(configPayload.config.web_search.provider !== "tavily_disabled");
-        setHasApiKey(configPayload.has_openrouter_api_key);
-        setModelOptions(modelsPayload.length ? modelsPayload : [configPayload.config.default_model.model]);
-        setKnowledgeStatus(knowledgePayload);
-      } catch (error) {
-        setToast((error as Error).message);
+        if (cancelled) return;
+        setAvailableAgents(agents);
+        setSelectedAgents(defaultSelection(agents));
+        setDefaultModel(config.config.default_model.model);
+        setTemperature(config.config.default_model.temperature);
+        setWebSearchEnabled(config.config.web_search.provider !== "tavily_disabled");
+        setHasApiKey(config.has_openrouter_api_key);
+        setModelOptions(models.length ? models : [config.config.default_model.model]);
+      } catch (err) {
+        showToast((err as Error).message);
       }
     };
     void load();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
+  // Auto-scroll to bottom when messages or streaming content changes
   useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const active = await fetchActiveMeetings();
-        if (cancelled) {
-          return;
-        }
-        setHistory((prev) => {
-          const fromApi = active.map((item) => ({ id: item.meeting_id, status: item.status }));
-          const remainder = prev.filter((item) => !fromApi.some((apiItem) => apiItem.id === item.id));
-          return [...fromApi, ...remainder].slice(0, 20);
-        });
-      } catch {
-        // Non-fatal: keep existing history state.
-      }
-    };
-    void tick();
-    const timer = window.setInterval(() => {
-      void tick();
-    }, 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [socket.messages, socket.streamingMessage?.content]);
 
+  // Show system messages on key events
   useEffect(() => {
-    const terminalEvent = [...events]
-      .reverse()
-      .find((event) => event.type === "meeting_complete" || event.type === "meeting_cancelled");
-    if (!terminalEvent) {
-      return;
+    if (socket.status === "done" && socket.outputs) {
+      addSystemMessage("Meeting complete.", "success");
     }
-    setHistory((prev) => {
-      if (prev.some((item) => item.id === terminalEvent.meeting_id)) {
-        return prev;
-      }
-      return [
-        { id: terminalEvent.meeting_id, status: terminalEvent.type.replace("meeting_", "") },
-        ...prev
-      ];
+  }, [socket.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (socket.errorMessage) {
+      addSystemMessage(socket.errorMessage, "error");
+    }
+  }, [socket.errorMessage]);
+
+  const addSystemMessage = (text: string, variant: SystemMessage["variant"] = "info") => {
+    setSystemMessages((prev) => [
+      ...prev,
+      { id: `sys-${Date.now()}-${Math.random()}`, text, variant },
+    ]);
+  };
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleStart = (briefing: { text: string; objectives: string[] }) => {
+    setSystemMessages([{ id: "start", text: `Discussing: "${briefing.text}"`, variant: "info" }]);
+    socket.connectAndStart({
+      briefing,
+      agents: selectedAgents,
+      models_by_agent: modelsByAgent,
+      enable_web_search: webSearchEnabled,
     });
-  }, [events]);
+  };
 
-  const persistConfig = async (patch: Record<string, unknown>, successMessage: string) => {
-    try {
-      await updateConfig(patch);
-      setToast(successMessage);
-    } catch (error) {
-      setToast((error as Error).message);
-    }
+  const handleReset = () => {
+    socket.reset();
+    setSystemMessages([]);
   };
 
   const handleSaveApiKey = async () => {
-    if (!apiKeyDraft.trim()) {
-      setToast("Enter an API key first.");
-      return;
-    }
+    if (!apiKeyDraft.trim()) { showToast("Enter an API key first."); return; }
     const ok = await storeKey("openrouter", apiKeyDraft.trim());
     setHasApiKey(ok);
     setApiKeyDraft("");
-    setToast(ok ? "API key saved." : "Failed to save API key.");
+    showToast(ok ? "API key saved." : "Failed to save API key.");
   };
 
   const handleValidateApiKey = async () => {
     const ok = await validateKey("openrouter", defaultModel);
-    setToast(ok ? "API key is valid." : "API key validation failed.");
+    showToast(ok ? "API key is valid." : "API key validation failed.");
   };
 
-  const handleRefreshKnowledge = async () => {
+  const persistConfig = async (patch: Record<string, unknown>, msg: string) => {
     try {
-      const result = await refreshKnowledge();
-      const updated = await fetchKnowledgeStatus();
-      setKnowledgeStatus(updated);
-      setToast(
-        `Knowledge refresh: refreshed=${result.refreshed.length}, failed=${result.failed.length}`
-      );
-    } catch (error) {
-      setToast((error as Error).message);
+      await updateConfig(patch);
+      showToast(msg);
+    } catch (err) {
+      showToast((err as Error).message);
     }
   };
 
+  const hasMessages = socket.messages.length > 0 || socket.streamingMessage !== null;
+
   return (
-    <div className="layout">
-      <Sidebar
-        meetings={history}
-        onNewMeeting={createNewMeeting}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
-      <main className="main-shell">
-        {toast ? (
-          <div className="toast" role="status">
-            {toast}
+    <div className="app">
+      {/* Header */}
+      <header className="header">
+        <span className="header-brand">Boardroom</span>
+        <AgentSelector
+          available={availableAgents}
+          selected={selectedAgents}
+          modelsByAgent={modelsByAgent}
+          modelOptions={modelOptions}
+          disabled={isBusy}
+          onChange={setSelectedAgents}
+          onModelsChange={setModelsByAgent}
+        />
+        <div className="header-actions">
+          <button
+            className="icon-btn"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            title="Settings"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.4"/>
+              <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      {/* Chat area */}
+      <div className="chat-area" role="log" aria-live="polite" aria-label="Board discussion">
+        {!hasMessages && systemMessages.length === 0 ? (
+          <div className="empty-state">
+            <h2>Start a board discussion</h2>
+            <p>
+              Select your board members above, then type a topic below.
+              The board will deliberate in real time.
+            </p>
           </div>
         ) : null}
-        <div className={isBusy ? "meeting-shell meeting-shell-busy" : "meeting-shell"}>
-          <section className="meeting-workspace" aria-labelledby="live-meeting-title">
-            <MeetingStatus
-              status={socket.status}
-              activeSpeaker={activeSpeaker}
-              turns={messages.length}
-              meetingId={latestMeetingId}
-              canCancel={socket.status === "running"}
-              onCancel={socket.cancel}
-            />
 
-            {terminalError ? (
-              <div className={terminalError.fatal ? "error-panel error-panel-fatal" : "error-panel"}>
-                <strong>Meeting error</strong>
-                <p>{terminalError.message}</p>
-                <small>
-                  {terminalError.code} {terminalError.fatal ? "· Fatal" : "· Recoverable"}
-                </small>
-              </div>
-            ) : null}
+        {systemMessages.map((sm) => (
+          <div key={sm.id} className="system-msg">
+            <span className={`system-msg-inner${sm.variant === "error" ? " error" : sm.variant === "success" ? " success" : ""}`}>
+              {sm.text}
+            </span>
+          </div>
+        ))}
 
-            <div className="conversation" role="log" aria-live="polite" aria-label="Live meeting transcript">
-              {messages.length === 0 && !currentTurn ? (
-                <div className="empty-transcript">
-                  <p className="eyebrow">Live meeting</p>
-                  <h2>Start a meeting to watch the board think in real time.</h2>
-                  <p>
-                    Active speaker, completed turns, tool activity, and final artifacts will stay visible
-                    here instead of being buried below setup.
-                  </p>
-                </div>
-              ) : null}
+        {socket.messages.map((msg, idx) => (
+          <MessageBubble
+            key={`${msg.meetingId}-${msg.agentId}-${msg.timestamp}-${idx}`}
+            agentId={msg.agentId}
+            agentName={msg.agentName}
+            content={msg.content}
+            timestamp={msg.timestamp}
+            toolCount={msg.toolResults.length}
+          />
+        ))}
 
-              {messages.map((message, idx) => (
-                <MessageBubble
-                  key={`${message.meeting_id}-${message.agent_id}-${message.timestamp}-${idx}`}
-                  agentId={message.agent_id}
-                  agentName={message.agent_name}
-                  content={message.content}
-                  timestamp={message.timestamp}
-                  toolCount={message.tool_results.length}
-                  turnNumber={idx + 1}
-                />
-              ))}
+        {socket.streamingMessage && (
+          <StreamingMessage
+            agentId={socket.streamingMessage.agentId}
+            agentName={socket.streamingMessage.agentName}
+            role={socket.streamingMessage.role}
+            content={socket.streamingMessage.content}
+          />
+        )}
 
-              {currentTurn ? (
-                <article className="thinking-row" aria-live="polite">
-                  <span className="thinking-pulse" aria-hidden="true" />
-                  <div>
-                    <strong>{currentTurn.agent_name} is thinking</strong>
-                    <span>
-                      Turn {currentTurn.turn_number} · {currentTurn.role}
-                    </span>
-                  </div>
-                </article>
-              ) : null}
-            </div>
+        {socket.status === "recovering" && (
+          <div className="system-msg">
+            <span className="system-msg-inner" style={{ color: "var(--warning)" }}>
+              Recovering from provider error, retrying...
+            </span>
+          </div>
+        )}
 
-            <OutputsPanel outputs={outputs} />
-          </section>
+        <div ref={chatBottomRef} />
+      </div>
 
-          <aside className={isBusy ? "setup-panel setup-panel-collapsed" : "setup-panel"} aria-label="Meeting setup">
-            <div className="setup-intro">
-              <p className="eyebrow">Setup</p>
-              <h2>Shape the boardroom</h2>
-              <p>Define the brief, choose agents, then launch. The live process stays primary once it starts.</p>
-            </div>
-            <BriefingDialog value={briefing} onChange={setBriefing} />
-            <AgentSelector
-              agents={availableAgents}
-              modelOptions={modelOptions}
-              selected={agents}
-              modelsByAgent={modelsByAgent}
-              onChange={setAgents}
-              onModelsChange={setModelsByAgent}
-            />
-            <ReviewLaunch
-              briefingText={briefing.text}
-              agents={agents}
-              disabled={!canStart}
-              onLaunch={startMeeting}
-            />
-          </aside>
-        </div>
-      </main>
+      {/* Input */}
+      <ChatInput
+        status={socket.status}
+        onStart={handleStart}
+        onCancel={socket.cancel}
+        onReset={handleReset}
+      />
+
+      {/* Settings drawer */}
       <SettingsDrawer
         open={settingsOpen}
         hasApiKey={hasApiKey}
@@ -334,7 +250,6 @@ export default function App() {
         temperature={temperature}
         webSearchEnabled={webSearchEnabled}
         modelOptions={modelOptions}
-        knowledgeStatus={knowledgeStatus}
         onApiKeyDraftChange={setApiKeyDraft}
         onSaveApiKey={handleSaveApiKey}
         onValidateApiKey={handleValidateApiKey}
@@ -348,12 +263,12 @@ export default function App() {
         }}
         onWebSearchEnabledChange={(next) => {
           setWebSearchEnabled(next);
-          setToast(next ? "Web search enabled for new meetings." : "Web search disabled for new meetings.");
+          showToast(next ? "Web search enabled." : "Web search disabled.");
         }}
-        onRefreshKnowledge={handleRefreshKnowledge}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }
-
