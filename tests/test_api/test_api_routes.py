@@ -134,6 +134,71 @@ def test_ws_meeting_streams_events_from_service(tmp_path: Path) -> None:
         assert ws.receive_json()["type"] == "meeting_complete"
 
 
+def test_ws_meeting_streams_recoverable_state_before_terminal_event(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path, vector_enabled=False)
+
+    @dataclass
+    class FakeSession:
+        meeting_id: str
+        event_queue: asyncio.Queue[dict[str, Any]]
+        status: str = "completed"
+
+    class FakeMeetingService:
+        async def start_meeting(self, *, payload: Any, config: AppConfig) -> FakeSession:
+            _ = payload
+            _ = config
+            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            await q.put({"type": "meeting_started", "meeting_id": "m-recover"})
+            await q.put(
+                {
+                    "type": "meeting_state.v2",
+                    "version": "2",
+                    "meeting_id": "m-recover",
+                    "phase": "recover",
+                    "status": "waiting_retry",
+                    "error_category": "rate_limited",
+                    "terminal": False,
+                    "retry": {"attempt": 1, "max_attempts": 3, "next_retry_ms": 1000},
+                    "user_message": "The provider is rate limited. The meeting is retrying shortly.",
+                    "ts": "2026-01-01T00:00:00Z",
+                }
+            )
+            await q.put(
+                {
+                    "type": "meeting_complete",
+                    "meeting_id": "m-recover",
+                    "termination_reason": "max_turns",
+                    "outputs": {"transcript": None, "kill_sheet": None, "consensus_roadmap": None},
+                }
+            )
+            return FakeSession(meeting_id="m-recover", event_queue=q)
+
+        async def cancel_meeting(self, meeting_id: str) -> bool:
+            _ = meeting_id
+            return True
+
+        def mark_disconnected(self, meeting_id: str) -> None:
+            _ = meeting_id
+
+        def forget_meeting(self, meeting_id: str) -> None:
+            _ = meeting_id
+
+    client = _client_with_config(cfg, meeting_service=FakeMeetingService())
+    with client.websocket_connect("/ws/meeting") as ws:
+        ws.send_json(
+            {
+                "type": "start_meeting",
+                "briefing": {"text": "hello", "objectives": ["obj"]},
+                "agents": ["adversary", "strategist"],
+            }
+        )
+        assert ws.receive_json()["type"] == "meeting_started"
+        recover_event = ws.receive_json()
+        assert recover_event["type"] == "meeting_state.v2"
+        assert recover_event["terminal"] is False
+        assert ws.receive_json()["type"] == "meeting_complete"
+
+
 def test_store_key_endpoint_uses_config_service(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path, vector_enabled=False)
     service = ConfigService(explicit_path=cfg)
@@ -152,6 +217,52 @@ def test_store_key_endpoint_uses_config_service(tmp_path: Path) -> None:
     assert resp.status_code == 200
     assert called == {"provider": "openrouter", "api_key": "secret-key"}
     assert resp.json()["validated"] is False
+
+
+def test_ws_meeting_streams_turn_chunks_before_turn_complete(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path, vector_enabled=False)
+
+    @dataclass
+    class FakeSession:
+        meeting_id: str
+        event_queue: asyncio.Queue[dict[str, Any]]
+        status: str = "completed"
+
+    class FakeMeetingService:
+        async def start_meeting(self, *, payload: Any, config: AppConfig) -> FakeSession:
+            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            await q.put({"type": "meeting_started", "meeting_id": "m-stream"})
+            await q.put({"type": "turn_start", "meeting_id": "m-stream", "agent_id": "adversary",
+                         "agent_name": "Marcus Vale", "role": "adversary", "turn_number": 1})
+            await q.put({"type": "turn_chunk", "meeting_id": "m-stream", "agent_id": "adversary", "chunk": "Hello"})
+            await q.put({"type": "turn_chunk", "meeting_id": "m-stream", "agent_id": "adversary", "chunk": " world"})
+            await q.put({"type": "turn_complete", "meeting_id": "m-stream", "agent_id": "adversary",
+                         "agent_name": "Marcus Vale", "content": "Hello world",
+                         "timestamp": "2026-01-01T00:00:00Z", "tool_results": []})
+            await q.put({"type": "meeting_complete", "meeting_id": "m-stream",
+                         "termination_reason": "max_turns",
+                         "outputs": {"transcript": None, "kill_sheet": None, "consensus_roadmap": None}})
+            return FakeSession(meeting_id="m-stream", event_queue=q)
+
+        async def cancel_meeting(self, meeting_id: str) -> bool:
+            return True
+
+        def mark_disconnected(self, meeting_id: str) -> None:
+            pass
+
+        def forget_meeting(self, meeting_id: str) -> None:
+            pass
+
+    client = _client_with_config(cfg, meeting_service=FakeMeetingService())
+    with client.websocket_connect("/ws/meeting") as ws:
+        ws.send_json({"type": "start_meeting", "briefing": {"text": "test", "objectives": []},
+                      "agents": ["adversary", "strategist"]})
+        events = [ws.receive_json() for _ in range(6)]
+
+    types = [e["type"] for e in events]
+    assert types == ["meeting_started", "turn_start", "turn_chunk", "turn_chunk", "turn_complete", "meeting_complete"]
+    chunks = [e["chunk"] for e in events if e["type"] == "turn_chunk"]
+    assert chunks == ["Hello", " world"]
 
 
 def test_resolve_frontend_dist_prefers_cwd(tmp_path: Path, monkeypatch: Any) -> None:

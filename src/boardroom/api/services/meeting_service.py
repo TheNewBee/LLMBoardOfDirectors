@@ -154,7 +154,25 @@ class MeetingService:
             web_search_tool=WebSearchTool(config=config.web_search, env=os.environ),
             disabled_tools=disabled_tools,
         )
-        router = LLMRouter()
+        def on_llm_recovery(
+            error: LLMBackendError,
+            attempt: int,
+            max_attempts: int,
+            next_retry_ms: int | None,
+        ) -> None:
+            self._emit_threadsafe(
+                session,
+                self._meeting_state_v2_event(
+                    session=session,
+                    error=error,
+                    terminal=False,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    next_retry_ms=next_retry_ms,
+                ),
+            )
+
+        router = LLMRouter(recovery_callback=on_llm_recovery)
         termination = _termination_for_max_turns(payload.max_turns)
 
         def before_turn(agent_id: str) -> None:
@@ -189,9 +207,29 @@ class MeetingService:
                 },
             )
 
-        def tool_hook(*, meeting: MeetingState, message: Message, raw_content: str) -> None:
+        def tool_hook(
+            *,
+            meeting: MeetingState,
+            message: Message | None = None,
+            agent_id: str | None = None,
+            raw_content: str,
+        ) -> None:
             _ = meeting
+            _ = agent_id
+            if message is None:
+                return
             tools.apply_to_message(message=message, raw_content=raw_content)
+
+        def on_chunk(*, agent_id: str, chunk: str) -> None:
+            self._emit_threadsafe(
+                session,
+                {
+                    "type": "turn_chunk",
+                    "meeting_id": session.meeting_id,
+                    "agent_id": agent_id,
+                    "chunk": chunk,
+                },
+            )
 
         orch = MeetingOrchestrator(
             registry=reg,
@@ -201,6 +239,7 @@ class MeetingService:
             tool_hook=tool_hook,
             before_agent_turn=before_turn,
             after_agent_message=after_message,
+            streaming_chunk_callback=on_chunk,
         )
 
         state = MeetingState(
@@ -262,17 +301,18 @@ class MeetingService:
                     "outputs": partial,
                 },
             )
-        except (KeyError, LLMBackendError) as exc:
+        except KeyError as exc:
             session.status = "error"
-            self._emit_threadsafe(
-                session,
-                {
-                    "type": "error",
-                    "code": "missing_api_key",
-                    "message": str(exc),
-                    "fatal": True,
-                },
+            error = LLMBackendError(
+                str(exc),
+                category="missing_api_key",
+                provider="openrouter",
+                safe_message="The OpenRouter API key is missing or invalid. Update settings before retrying.",
             )
+            self._emit_terminal_llm_error(session, error)
+        except LLMBackendError as exc:
+            session.status = "error"
+            self._emit_terminal_llm_error(session, exc)
         except Exception as exc:
             session.status = "error"
             self._emit_threadsafe(
@@ -284,6 +324,55 @@ class MeetingService:
                     "fatal": True,
                 },
             )
+
+    def _emit_terminal_llm_error(self, session: MeetingSession, error: LLMBackendError) -> None:
+        self._emit_threadsafe(
+            session,
+            self._meeting_state_v2_event(
+                session=session,
+                error=error,
+                terminal=True,
+                attempt=None,
+                max_attempts=None,
+                next_retry_ms=None,
+            ),
+        )
+        self._emit_threadsafe(
+            session,
+            {
+                "type": "error",
+                "code": error.category,
+                "message": error.safe_message,
+                "fatal": True,
+            },
+        )
+
+    def _meeting_state_v2_event(
+        self,
+        *,
+        session: MeetingSession,
+        error: LLMBackendError,
+        terminal: bool,
+        attempt: int | None,
+        max_attempts: int | None,
+        next_retry_ms: int | None,
+    ) -> dict[str, Any]:
+        return {
+            "type": "meeting_state.v2",
+            "version": "2",
+            "meeting_id": session.meeting_id,
+            "phase": "wrap_up" if terminal else "recover",
+            "status": "failed_terminal" if terminal else "waiting_retry",
+            "error_category": error.category,
+            "terminal": terminal,
+            "retry": {
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "next_retry_ms": next_retry_ms,
+            },
+            "user_message": error.safe_message,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
 
     def _persist_partial(
         self,
