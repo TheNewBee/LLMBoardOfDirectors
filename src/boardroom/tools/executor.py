@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 from boardroom.models import Message
 from boardroom.tools.python_executor import PythonExecutor
@@ -34,7 +34,9 @@ class ToolExecutor:
         *,
         message: Message,
         raw_content: str,
+        agent_role: object | None = None,
     ) -> None:
+        _ = agent_role
         calls, parse_errors = self.parse_tool_calls(raw_content)
         if not calls and not parse_errors:
             return
@@ -85,7 +87,7 @@ class ToolExecutor:
     def _execute_single(self, call: dict[str, Any]) -> dict[str, Any]:
         try:
             name = str(call.get("name"))
-            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            args = cast(dict[str, Any], call.get("args")) if isinstance(call.get("args"), dict) else {}
             handler = self._handlers.get(name)
             if handler is None:
                 return {"name": name, "ok": False, "error": f"Unsupported tool: {name}"}

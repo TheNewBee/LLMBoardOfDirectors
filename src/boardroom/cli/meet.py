@@ -133,8 +133,17 @@ def meet_command(
                 status = "ok" if row.get("ok") else "error"
                 typer.echo(f"- {tool_name}: {status}")
 
-    def tool_hook(*, meeting: MeetingState, message: Message, raw_content: str) -> None:
+    def tool_hook(
+        *,
+        meeting: MeetingState,
+        message: Message | None = None,
+        agent_id: str | None = None,
+        raw_content: str,
+    ) -> None:
         _ = meeting
+        _ = agent_id
+        if message is None:
+            return
         try:
             tools.apply_to_message(message=message, raw_content=raw_content)
         except Exception as exc:  # pragma: no cover - guarded by tool tests

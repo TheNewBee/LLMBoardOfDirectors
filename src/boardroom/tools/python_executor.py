@@ -115,9 +115,10 @@ class PythonExecutor:
             except subprocess.TimeoutExpired as exc:
                 return PythonExecutionResult(
                     ok=False,
-                    stdout=self._truncate_output(exc.stdout or ""),
+                    stdout=self._truncate_output(self._output_to_text(exc.stdout)),
                     stderr=self._truncate_output(
-                        (exc.stderr or "") + "\nExecution timed out."),
+                        self._output_to_text(exc.stderr) + "\nExecution timed out."
+                    ),
                     exit_code=None,
                     timed_out=True,
                 )
@@ -134,6 +135,14 @@ class PythonExecutor:
         if len(text) <= self.max_output_chars:
             return text
         return text[: self.max_output_chars] + "\n...[truncated]"
+
+    @staticmethod
+    def _output_to_text(output: bytes | str | None) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, bytes):
+            return output.decode("utf-8", errors="replace")
+        return output
 
     @staticmethod
     def _blocked_reason(snippet: str) -> str | None:
