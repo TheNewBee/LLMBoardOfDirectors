@@ -43,6 +43,10 @@ class Phase2ToolHook(Protocol):
     ) -> None: ...
 
 
+class StreamingChunkCallback(Protocol):
+    def __call__(self, *, agent_id: str, chunk: str) -> None: ...
+
+
 def phase2_tool_hook_noop(
     *,
     meeting: MeetingState,
@@ -108,6 +112,7 @@ class MeetingOrchestrator:
         before_agent_turn: Callable[[str], None] | None = None,
         after_agent_message: Callable[[
             MeetingState, Message], None] | None = None,
+        streaming_chunk_callback: StreamingChunkCallback | None = None,
     ) -> None:
         self._registry = registry
         self._app_config = app_config
@@ -118,6 +123,7 @@ class MeetingOrchestrator:
         self._tool_hook_mode = self._detect_tool_hook_mode(self._tool_hook)
         self._before_agent_turn = before_agent_turn
         self._after_agent_message = after_agent_message
+        self._streaming_chunk_cb = streaming_chunk_callback
         self._knowledge_store: KnowledgeVectorStore | None = None
         self._memory_store: AgentMemoryStore | None = None
         self._graph: CompiledStateGraph = self._build_graph()
@@ -251,12 +257,24 @@ class MeetingOrchestrator:
             )
             if self._before_agent_turn is not None:
                 self._before_agent_turn(agent_id)
-            raw = self._llm.generate_for_agent(
-                agent=cfg,
-                config=self._app_config,
-                messages=payload,
-                env=state["env"],
-            )
+            if self._streaming_chunk_cb is not None and hasattr(self._llm, "generate_for_agent_stream"):
+                chunks: list[str] = []
+                for chunk in self._llm.generate_for_agent_stream(  # type: ignore[union-attr]
+                    agent=cfg,
+                    config=self._app_config,
+                    messages=payload,
+                    env=state["env"],
+                ):
+                    chunks.append(chunk)
+                    self._streaming_chunk_cb(agent_id=agent_id, chunk=chunk)
+                raw = "".join(chunks)
+            else:
+                raw = self._llm.generate_for_agent(
+                    agent=cfg,
+                    config=self._app_config,
+                    messages=payload,
+                    env=state["env"],
+                )
             content = raw.strip()
             if not content:
                 _LOG.error(

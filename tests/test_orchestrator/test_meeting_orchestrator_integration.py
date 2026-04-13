@@ -18,6 +18,8 @@ from boardroom.models import (
     ProviderConfig,
     TerminationReason,
 )
+from collections.abc import Iterator
+
 from boardroom.orchestrator.meeting_orchestrator import MeetingOrchestrator, phase2_tool_hook_noop
 from boardroom.orchestrator.termination import TerminationDetector, TerminationDetectorConfig
 from boardroom.registry import AgentRegistry
@@ -443,3 +445,87 @@ def test_data_specialist_tool_hook_attaches_tool_calls_and_results() -> None:
     assert first.tool_results
     assert first.tool_results[0]["ok"] is True
     assert "Tool execution summary" in first.content
+
+
+class StreamingFakeLLM:
+    """FakeLLM that also exposes generate_for_agent_stream for streaming tests."""
+
+    def __init__(self, responses: list[list[str]]) -> None:
+        self._responses = responses
+        self._i = 0
+
+    def generate_for_agent(
+        self,
+        *,
+        agent: AgentConfig,
+        config: AppConfig,
+        messages: list[dict[str, str]],
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        return "".join(self._responses[self._i % len(self._responses)])
+
+    def generate_for_agent_stream(
+        self,
+        *,
+        agent: AgentConfig,
+        config: AppConfig,
+        messages: list[dict[str, str]],
+        env: Mapping[str, str] | None = None,
+    ) -> Iterator[str]:
+        chunks = self._responses[self._i % len(self._responses)]
+        self._i += 1
+        yield from chunks
+
+
+def test_streaming_chunk_callback_receives_all_chunks() -> None:
+    det = TerminationDetector(
+        TerminationDetectorConfig(min_turns=1, max_turns=1, deadlock_jaccard_threshold=0.99),
+        consensus_judge=lambda _m: False,
+    )
+    chunks_received: list[tuple[str, str]] = []
+
+    def on_chunk(*, agent_id: str, chunk: str) -> None:
+        chunks_received.append((agent_id, chunk))
+
+    orch = MeetingOrchestrator(
+        registry=AgentRegistry(),
+        app_config=_app_config(),
+        llm=StreamingFakeLLM([["Hello", " world", "!"]]),
+        termination_detector=det,
+        streaming_chunk_callback=on_chunk,
+    )
+    final = orch.start_meeting(
+        meeting_id="stream-test",
+        briefing=_briefing(),
+        selected_agents=["adversary", "strategist"],
+        env={"OPENROUTER_API_KEY": "test-key"},
+    )
+
+    assert final.messages
+    assert final.messages[0].content == "Hello world!"
+    assert len(chunks_received) == 3
+    assert [c for _, c in chunks_received] == ["Hello", " world", "!"]
+
+
+def test_streaming_falls_back_to_generate_when_no_callback() -> None:
+    det = TerminationDetector(
+        TerminationDetectorConfig(min_turns=1, max_turns=1, deadlock_jaccard_threshold=0.99),
+        consensus_judge=lambda _m: False,
+    )
+    # StreamingFakeLLM has generate_for_agent_stream but no callback passed -- should still work
+    orch = MeetingOrchestrator(
+        registry=AgentRegistry(),
+        app_config=_app_config(),
+        llm=StreamingFakeLLM([["A complete response."]]),
+        termination_detector=det,
+        streaming_chunk_callback=None,
+    )
+    final = orch.start_meeting(
+        meeting_id="fallback-test",
+        briefing=_briefing(),
+        selected_agents=["adversary", "strategist"],
+        env={"OPENROUTER_API_KEY": "test-key"},
+    )
+
+    assert final.messages
+    assert final.messages[0].content == "A complete response."
