@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentSummary } from "../api";
 import { agentColor } from "./MessageBubble";
+import { SearchableModelList } from "./SearchableModelList";
 
 type Props = {
   available: AgentSummary[];
@@ -99,26 +100,18 @@ export function AgentSelector({
               </button>
             )}
             {modelPopover === agent.id && (
-              <div className="agent-dropdown" style={{ left: 0, top: "calc(100% + 4px)", minWidth: 200 }}>
+              <div className="agent-dropdown" style={{ left: 0, top: "calc(100% + 4px)", minWidth: 280 }}>
                 <div className="agent-dropdown-header">Model for {agent.name}</div>
-                <button
-                  className={`agent-dropdown-item${!model ? " active" : ""}`}
-                  onClick={() => setModel(agent.id, "")}
-                >
-                  Default
-                </button>
-                {modelOptions.slice(0, 20).map((m) => (
-                  <button
-                    key={m}
-                    className={`agent-dropdown-item${model === m ? " active" : ""}`}
-                    onClick={() => setModel(agent.id, m)}
-                    title={m}
-                  >
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {m}
-                    </span>
-                  </button>
-                ))}
+                <div style={{ padding: "0 0.5rem 0.5rem" }}>
+                  <SearchableModelList
+                    id={`model-search-${agent.id}`}
+                    options={modelOptions}
+                    value={model ?? ""}
+                    onChange={(next) => setModel(agent.id, next)}
+                    defaultOptionLabel="Default"
+                    emptyMessage="No matching models."
+                  />
+                </div>
               </div>
             )}
           </div>

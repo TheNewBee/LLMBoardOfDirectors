@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 type Props = {
   id: string;
-  label: string;
+  label?: string;
   options: string[];
   value: string;
   onChange: (next: string) => void;
@@ -22,6 +22,8 @@ export function SearchableModelList({
   emptyMessage = "No matching models.",
 }: Props) {
   const [query, setQuery] = useState("");
+  const normalizedLabel = label?.trim() ?? "";
+  const accessibleLabel = normalizedLabel || "Search models";
 
   const allOptions = useMemo(
     () => Array.from(new Set([value, ...options].filter(Boolean))),
@@ -46,7 +48,9 @@ export function SearchableModelList({
 
   return (
     <div className="searchable-list-wrapper">
-      <label className="field-label" htmlFor={id}>{label}</label>
+      {normalizedLabel ? (
+        <label className="field-label" htmlFor={id}>{normalizedLabel}</label>
+      ) : null}
       <input
         id={id}
         type="search"
@@ -54,8 +58,9 @@ export function SearchableModelList({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={searchPlaceholder}
+        aria-label={accessibleLabel}
       />
-      <div className="searchable-list-options" aria-label={`${label} options`}>
+      <div className="searchable-list-options" aria-label={`${accessibleLabel} options`}>
         {showDefault && (
           <button
             type="button"
