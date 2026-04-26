@@ -121,11 +121,10 @@ class Briefing(BaseModel):
     @field_validator("objectives")
     @classmethod
     def validate_objectives(cls, objectives: list[str]) -> list[str]:
-        cleaned = [objective.strip()
-                   for objective in objectives if objective.strip()]
-        if not cleaned:
-            raise ValueError("objectives must include at least one item")
-        return cleaned
+        # Objectives are optional: the chat UI does not prompt for them. Strip
+        # whitespace-only entries but allow an empty list; the briefing `text`
+        # already captures the discussion topic.
+        return [objective.strip() for objective in objectives if objective.strip()]
 
     @model_validator(mode="after")
     def validate_alpha_content(self) -> "Briefing":

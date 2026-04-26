@@ -145,6 +145,30 @@ class MeetingService:
         payload: MeetingStartPayload,
         config: AppConfig,
     ) -> None:
+        try:
+            self._run_sync_meeting_unsafe(session, payload, config)
+        except Exception as exc:
+            # Safety net: if setup raises before `orch.run_meeting` (e.g. Briefing
+            # validation, agent registry errors, model-config errors), the background
+            # task would otherwise die silently and the WebSocket drain loop would
+            # wait forever. Emit an error event so the UI always gets closure.
+            session.status = "error"
+            self._emit_threadsafe(
+                session,
+                {
+                    "type": "error",
+                    "code": "orchestrator_setup_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "fatal": True,
+                },
+            )
+
+    def _run_sync_meeting_unsafe(
+        self,
+        session: MeetingSession,
+        payload: MeetingStartPayload,
+        config: AppConfig,
+    ) -> None:
         reg = AgentRegistry()
         reg.validate_selection(payload.agents)
         disabled_tools = {PYTHON_EXEC_TOOL.name}

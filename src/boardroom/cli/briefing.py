@@ -44,8 +44,15 @@ def submit(
 ) -> None:
     """Submit a briefing: idea, objectives, optional Alpha files."""
     mid = meeting_id or str(uuid.uuid4())
+    cleaned_objectives = [o.strip() for o in objective if o.strip()]
+    if not cleaned_objectives:
+        typer.echo(
+            "At least one --objective (-o) is required for CLI briefings.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     try:
-        briefing = build_briefing(idea, objective, file)
+        briefing = build_briefing(idea, cleaned_objectives, file)
     except (ValidationError, ValueError, FileNotFoundError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

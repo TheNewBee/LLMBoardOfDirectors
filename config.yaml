@@ -9,22 +9,24 @@ default_model:
   temperature: 0.7
   max_tokens: 2000
 
+# Per-role model overrides. Verified working on OpenRouter free tier (Apr 2026).
+# Spread across different providers to reduce cross-role rate-limit collisions.
 agent_models:
   adversary:
     provider: openrouter
-    model: qwen/qwen3.6-plus:free
+    model: openai/gpt-oss-120b:free
   data_specialist:
     provider: openrouter
-    model: deepseek/deepseek-chat
+    model: google/gemma-3-27b-it:free
   strategist:
     provider: openrouter
-    model: z-ai/glm-4.5-air:free
+    model: inclusionai/ling-2.6-1t:free
   cfo:
     provider: openrouter
-    model: qwen/qwen3.6-plus:free
+    model: minimax/minimax-m2.5:free
   tech_director:
     provider: openrouter
-    model: qwen/qwen3.6-plus:free
+    model: openai/gpt-oss-20b:free
 
 paths:
   outputs_dir: transcripts

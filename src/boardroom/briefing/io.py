@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from boardroom.models import Briefing
 
 SUPPORTED_ALPHA_SUFFIXES: frozenset[str] = frozenset(
@@ -52,13 +54,31 @@ def build_briefing(
     objectives: Sequence[str],
     alpha_paths: Sequence[str | Path] | None = None,
 ) -> Briefing:
-    """Construct a validated Briefing from Chairman inputs and optional Alpha paths."""
+    """Construct a validated Briefing from Chairman inputs and optional Alpha paths.
+
+    The Briefing model allows an empty objectives list (for the chat UI), but
+    the Chairman CLI workflow requires at least one objective. We enforce it
+    here so CLI/offline-builder callers keep the stricter contract.
+    """
     cleaned_idea = idea.strip()
+    cleaned_objectives = [o.strip() for o in objectives if o and o.strip()]
+    if not cleaned_objectives:
+        raise ValidationError.from_exception_data(
+            "Briefing",
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("objectives",),
+                    "input": list(objectives),
+                    "ctx": {"error": ValueError("objectives must include at least one item")},
+                }
+            ],
+        )
     alpha_paths = alpha_paths or []
     alpha_files, alpha_content = load_alpha_files(alpha_paths)
     return Briefing(
         text=cleaned_idea,
-        objectives=list(objectives),
+        objectives=cleaned_objectives,
         alpha_files=alpha_files,
         alpha_content=alpha_content,
     )
